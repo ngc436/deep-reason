@@ -1,0 +1,10 @@
+[tool.poetry]
+name = "deep_reason"
+version = "0.1.0"
+description = ""
+authors = ["Maria Khodorchenko <mariyaxod@yandex.ru>"]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+chromadb = "^0.6.3"
+langgraph = "^0.2.74"
