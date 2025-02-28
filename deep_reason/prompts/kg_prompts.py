@@ -1,11 +1,11 @@
-unknown_terms_prompt = """
+UNKNOWN_TERMS_PROMPT = """
 # Instruction on how to handle unknown terms
 
 If you see unknown terms, try to find the meaning of them in the context.
 """
 
 # TODO: rewrite prompt and add schema
-kg_prompt_var1 = """
+KG_PROMPT_VAR1 = """
 # Instruction for Creating Nodes and Triplets on a text fragment: 
 Nodes should depict entities or concepts, similar to Wikipedia nodes. 
 Use a structured triplet format to capture data, as follows: "subject, relation, object". 
@@ -35,10 +35,7 @@ Remember that triplets must be extracted in format:
 Extracted triplets:
 """
 
-# TODO
-context_extraction_prompt = """If you need to search for previous information"""
-
-planner_prompt = """
+PLANNER_PROMPT = """
 You are a brilliant planner agent for the triplet extraction task.
 Look carefully at the provided chunk of text and decide the following.
 1. Do you understand the provided chunk? Are there some specific terms that you don't know?

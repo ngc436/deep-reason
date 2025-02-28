@@ -1,8 +1,8 @@
 from typing import TypedDict
 from deep_reason.schemes import Triplet
 
-class ReportStateInput(TypedDict):
-    topic: str # Report topic
+class KgConstructionStateInput(TypedDict):
+    chunks: list[str] # List of chunks to process
 
 class KgConstructionState(TypedDict):
     completed_triplets: list[Triplet] # Final key we duplicate in outer state for Send() API

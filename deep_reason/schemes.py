@@ -19,6 +19,13 @@ class Quadriplet(BaseModel):
 class ChunkTripletsResult(BaseModel):
     triplets: list[Triplet] = Field(description="List of triplets")
 
+
+class Chunk(BaseModel):
+    text: str | None = Field(description="Text of the chunk")
+    chapter_name: str | None = Field(description="Name of the chapter")
+    document_id: int = Field(description="Id of the document")
+    order_id: int = Field(description="Order id of the chunk")
+
 def _take_any(a: Optional[Any], b: Optional[Any]) -> Optional[Any]:
     return a or b
 

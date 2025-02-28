@@ -15,7 +15,7 @@ from langgraph.prebuilt import create_react_agent
 
 from deep_reason.utils import StreamQAPipeline
 from deep_reason.schemes import AgentIntermediateOutputs
-from deep_reason.tools import Tool
+from deep_reason.tools.tools import Tool
 
 logger = logging.getLogger(__name__)
 

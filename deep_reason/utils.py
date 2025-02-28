@@ -464,3 +464,7 @@ class SpecialTokens:
         self.user_header = tokens["user_header"]
         self.assistant_header = tokens["assistant_header"]
         self.eot = tokens["eot"]
+
+def _get_chunks(text: str, chunk_size: int) -> List[str]:
+    ''' Split text into chunks of equal size'''
+    return [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
