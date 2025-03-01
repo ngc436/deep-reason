@@ -101,11 +101,28 @@ def build_chain(llm: BaseChatModel,
     return chain
 
 
+def build_triplets_mining_chain(llm: BaseChatModel) -> Runnable:
+    raise NotImplementedError("Not implemented")
+
+
 class KGConstructionAgent:
     def __init__(self, llm: BaseChatModel):
         self.llm = llm
 
     async def triplets_mining(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
+        # TODO: this function mines triplets from chunks
+        # 1. it takes the list of chunks from the state and ensure correct order of chunks using document_id and order_id
+        # 2. it splits the correctly ordered chunks into chunks tuples of 3 consecutive chunks each using sliding window.
+        #    This tuple contains the chunk being under consideration and "left" and "right" context. 
+        #    The subroutine for this should respect the following rules:
+        #    - use a dataclass to represent a tuple of 3 chunks with appropriatly named fields
+        #    - if the chunk is the very first one in the document we should process it with the right context only
+        #    - if the chunk is the very last one in the document we should process it with the left context only
+        # 3. it builds a chain that performs the actual mining by calling 'build_triplets_mining_chain' module-level function
+        # 4. it calls the chain with the list of chunk tuples using abatch methods (return_exceptions=True as a second argument)
+        # 5. it looks for exceptions in the results. Every exception should be logged on ERROR lebvel with exception info
+        # 6. it filters out all the exception from results and builds a new state object with the rest of results
+        # 7. it returns the new state object
         raise NotImplementedError("Not implemented")
 
 
