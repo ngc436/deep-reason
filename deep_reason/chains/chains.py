@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 class KGMiningWorkflowState(BaseModel):
     chunks: List[Chunk]
     triplets: List[Dict[str, Any]] = Field(default_factory=list)
+    ontology: Dict[str, List[str]] = Field(default_factory=dict)
+    knowledge_graph: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 @contextmanager
@@ -144,12 +146,50 @@ Current chunk: {current_chunk}
 
 
 def build_ontology_and_kg_compiling_chain(llm: BaseChatModel) -> Runnable:
-    raise NotImplementedError("Not implemented")
+    system_template = """You are an expert knowledge graph engineer. Your task is to organize extracted knowledge triplets into:
+1. An ontology - categorizing entities and relationships
+2. A structured knowledge graph
+
+Process the given triplets and incrementally build or refine the existing ontology and knowledge graph."""
+
+    human_template = """Process the following knowledge triplets:
+
+{triplets}
+
+Current Ontology (entities and relationships organized by category):
+{current_ontology}
+
+Current Knowledge Graph:
+{current_kg}
+
+Please analyze these triplets and update both the ontology and knowledge graph.
+{response_format_description}"""
+
+    class Entity(BaseModel):
+        entity_id: str = Field(description="Unique identifier for the entity")
+        name: str = Field(description="Name or label of the entity")
+        category: str = Field(description="Category or type of the entity")
+
+    class Relationship(BaseModel):
+        source_id: str = Field(description="Entity ID of the source/subject")
+        relation_type: str = Field(description="Type of relationship/predicate")
+        target_id: str = Field(description="Entity ID of the target/object")
+        confidence: float = Field(description="Confidence score between 0 and 1", ge=0, le=1)
+
+    class OntologyAndKG(BaseModel):
+        ontology: Dict[str, List[str]] = Field(description="Categories of entities and relationships")
+        entities: List[Entity] = Field(description="List of entities in the knowledge graph")
+        relationships: List[Relationship] = Field(description="List of relationships in the knowledge graph")
+    
+    parser = PydanticOutputParser(pydantic_object=OntologyAndKG)
+    
+    return build_chain(llm, system_template, human_template, parser)
 
 
 class KGConstructionAgent:
-    def __init__(self, llm: BaseChatModel):
+    def __init__(self, llm: BaseChatModel, context_window_length: int = 8000):
         self.llm = llm
+        self.context_window_length = context_window_length
 
     async def triplets_mining(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
         # 1. Order chunks by document_id and order_id
@@ -205,22 +245,102 @@ class KGConstructionAgent:
         # 6 & 7. Create and return new state with valid results
         return KGMiningWorkflowState(
             chunks=state.chunks,
-            triplets=valid_results
+            triplets=valid_results,
+            ontology=state.ontology,
+            knowledge_graph=state.knowledge_graph
         )
 
     async def ontology_and_kg_compiling(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
-        # TODO: On this step we want to process the triplets obtained from the previous 'triplets_mining' step
-        # 1. We take triplets and split them into batches that can be processed by LLM at once. 
-        # We are limited here by the context window of the LLM. The length of this window is a field of this class 'context_window_length' and being set in the constructor.
-        # 2. We build a chain that will be used to process each batch using function 'build_ontology_and_kg_compiling_chain'.
-        # 3. This chain accepts as arguments a batch, a current version of the ontology and a current version of the knowledge graph.
-        # If this is the first batch, the ontology and the knowledge graph are empty.
-        # 4. We process our sequence of batches one by one using so called 'refine' technique.
-        # this technique is a way to iteratively improve the ontology and the knowledge graph by adding new information from triples.
-        # 5. If there is Exception on some iteration we caught it, log it and raise our own exception.
-        # 6. If there is no Exception we return the new state with the updated ontology and the knowledge graph.
-        raise NotImplementedError("Not implemented")
-
+        if not state.triplets:
+            logger.warning("No triplets found in state, skipping ontology and kg compilation")
+            return state
+        
+        # Build the chain for ontology and KG compilation
+        chain = build_ontology_and_kg_compiling_chain(self.llm)
+        
+        # Initialize empty ontology and knowledge graph
+        current_ontology = {}
+        current_kg = {"entities": [], "relationships": []}
+        
+        # Estimate triplet size for batching (rough approximation)
+        def estimate_triplet_size(triplet):
+            t = triplet["triplet"]
+            return len(t.subject) + len(t.predicate) + len(t.object) + 10  # +10 for JSON structure overhead
+        
+        # Create batches based on context window
+        batches = []
+        current_batch = []
+        current_batch_size = 0
+        
+        # Sort triplets by document and then chunk order
+        sorted_triplets = sorted(
+            state.triplets, 
+            key=lambda x: (x["chunk"].document_id, x["chunk"].order_id)
+        )
+        
+        # Create batches
+        for triplet in sorted_triplets:
+            triplet_size = estimate_triplet_size(triplet)
+            
+            # If adding this triplet would exceed context window, start new batch
+            if current_batch_size + triplet_size > self.context_window_length // 2:  # Half context for triplets, half for other data
+                if current_batch:  # Only append if there are triplets in the batch
+                    batches.append(current_batch)
+                current_batch = [triplet]
+                current_batch_size = triplet_size
+            else:
+                current_batch.append(triplet)
+                current_batch_size += triplet_size
+        
+        # Add the last batch if not empty
+        if current_batch:
+            batches.append(current_batch)
+        
+        logger.info(f"Created {len(batches)} batches of triplets for processing")
+        
+        # Process batches iteratively, refining the ontology and knowledge graph
+        for batch_idx, batch in enumerate(batches):
+            try:
+                # Format triplets for the chain
+                triplets_text = "\n".join([
+                    f"- Subject: {t['triplet'].subject}, Predicate: {t['triplet'].predicate}, Object: {t['triplet'].object}"
+                    for t in batch
+                ])
+                
+                # Format current ontology and KG
+                current_ontology_text = json.dumps(current_ontology, indent=2) if current_ontology else "Empty ontology"
+                current_kg_text = json.dumps(current_kg, indent=2) if current_kg.get("entities") or current_kg.get("relationships") else "Empty knowledge graph"
+                
+                # Prepare input for the chain
+                chain_input = {
+                    "triplets": triplets_text,
+                    "current_ontology": current_ontology_text,
+                    "current_kg": current_kg_text
+                }
+                
+                # Process batch
+                logger.info(f"Processing batch {batch_idx+1}/{len(batches)}")
+                with measure_time(f"processing batch {batch_idx+1}"):
+                    result = await chain.ainvoke(chain_input)
+                
+                # Update ontology and knowledge graph with results
+                current_ontology = result.ontology
+                current_kg = {
+                    "entities": result.entities,
+                    "relationships": result.relationships
+                }
+                
+            except Exception as e:
+                logger.error(f"Error processing batch {batch_idx+1}: {str(e)}")
+                raise Exception(f"Failed to process triplets batch {batch_idx+1}: {str(e)}")
+        
+        # Return updated state
+        return KGMiningWorkflowState(
+            chunks=state.chunks,
+            triplets=state.triplets,
+            ontology=current_ontology,
+            knowledge_graph=current_kg
+        )
 
     def build_wf(self) -> Runnable[KGMiningWorkflowState, Dict[str, Any]]:
         wf = StateGraph(KGMiningWorkflowState)
