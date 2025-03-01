@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 class KgConstructionPipeline:
     def __init__(self, **model_kwargs):
+        print(os.environ[OPENAI_API_BASE])
         self.llm = VLLMChatOpenAI(
             model="/model",
             base_url=os.environ[OPENAI_API_BASE],
@@ -65,19 +66,16 @@ class KgConstructionPipeline:
         #     raise ValueError(f"Tool {tool_name} not found")
 
 
-    async def _node_agent_triplets(self, state: KgConstructionState):
+    async def _node_agent_triplets(self, state):
         '''
         Extract triplets from a set of chunks using LLM
         '''
         
         # Initialize lists for collecting results
-        # all_triplets = state.get("completed_triplets", [])
-        # terms = state.get("found_terms", [])
-        # instruments = state.get("used_instruments", [])
         all_triplets = []
         terms = []
         instruments = []
-        
+
         # Add the triplet extraction instrument to the used instruments
         if "triplet_extraction" not in instruments:
             instruments.append("triplet_extraction")
@@ -96,12 +94,6 @@ class KgConstructionPipeline:
             ]
         )
         
-        # Example triplets to provide as an example
-        # example_triplets = (
-        #     "apple, is a, fruit; apple, grows on, tree; "
-        #     "tree, has, leaves; tree, requires, water"
-        # )
-        
         retry_planner_parser = RetryOutputParser.from_llm(
             parser=parser,
             llm=self.llm,
@@ -116,58 +108,81 @@ class KgConstructionPipeline:
             RunnableLambda(lambda x: self._do_parsing_retrying(x, retry_planner_parser), name='retry_planner_lambda')
         )
         
-        # Process each chunk
-        chunks = state.get("chunks", [])
+        # Access chunks directly from state object if it's a Pydantic model
+        # or access using attribute notation for regular objects
+        chunks = state.chunks if hasattr(state, 'chunks') else state.get("chunks", [])
+        print(chunks[0])
         for chunk in chunks:
             try:
                 # Extract triplets using LLM
-                triplet_text = await self._run_chain_with_retries(
+                result = await self._run_chain_with_retries(
                     chain=triplet_chain,
-                    chain_kwargs={"chunk": chunk.text},
+                    chain_kwargs={
+                        "chunk": chunk.text if hasattr(chunk, 'text') else chunk,
+                        "response_format_description": parser.get_format_instructions()
+                    },
                     max_retry_attempts=3
                 )
-                # Parse the triplets from the text response
-                # Format should be "subject, relation, object; subject, relation, object; ..."
-                triplet_strings = triplet_text.split(";")
-                
-                for triplet_str in triplet_strings:
-                    triplet_str = triplet_str.strip()
-                    if not triplet_str:
-                        continue
-                        
-                    parts = [part.strip() for part in triplet_str.split(",", 2)]
-                    if len(parts) == 3:
-                        subject, relation, obj = parts
-                        all_triplets.append(Triplet(
-                            subject=subject,
-                            relation=relation,
-                            object=obj
-                        ))
-                        
-                        # Add subject and object to found terms
-                        if subject not in terms:
-                            terms.append(subject)
-                        if obj not in terms:
-                            terms.append(obj)
                             
             except Exception as e:
                 # Log the error but continue processing other chunks
-                print(f"Error processing chunk: {e}")
+                logger.warning(f"Error processing chunk: {e}")
         
         # Update the state with the results
-        return {
-            "completed_triplets": all_triplets,
-            "found_terms": terms,
-            "used_instruments": instruments
-        }
-
+        return KgConstructionState(
+            chunks=chunks,
+            completed_triplets=all_triplets,
+            found_terms=terms,
+            used_instruments=instruments
+        )
+    
+    async def _run_chain_with_retries(self, chain: Runnable, chain_kwargs: Dict[str, Any], max_retry_attempts: Optional[int] = None) -> Optional[Any]:
+        retry_attempts = max_retry_attempts or self.max_retry_attempts
+        retry_delay = 2
+        attempt = 0
+        
+        while attempt < retry_attempts:
+            try:
+                result = await chain.ainvoke(chain_kwargs)
+                return result  # Return immediately on success
+            except OutputParserException:
+                logger.warning("Parsing error occurred. Interrupting execution.")
+                raise
+            except APIConnectionError:
+                logger.warning(f"APIConnectionError. Attempt: {attempt + 1}/{retry_attempts}. Retrying after {retry_delay} seconds")
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 1.5  # Exponential backoff
+            except Exception as e:
+                logger.warning(f"Unexpected error during chain execution: {str(e)}")
+            
+            attempt += 1
+        
+        logger.error(f"All {retry_attempts} retry attempts failed.")
+        return None  # Return None after all retries fail
+    
+    
+    def _do_parsing_retrying(self, llm_output, retry_parser):
+        """Parse the LLM output into a structured format with retry capability"""
+        try:
+            # First try to get the format directly
+            response_format_description = retry_parser.parser.get_format_instructions()
+            parsed_response = retry_parser.parse_with_prompt(
+                llm_output, 
+                prompt=f"Format the triplets according to this format: {response_format_description}\n\nText to format: {llm_output}"
+            )
+            return parsed_response
+        except Exception as e:
+            logger.warning(f"Error parsing LLM output: {e}")
+            # Return empty result if parsing fails
+            return ChunkTripletsResult(triplets=[])
+        
+    
     async def get_knowledge_graph(self, chunks: List[Chunk]):
         ''' Compile the knowledge graph from a set of chunks'''
 
-        # transform input to the correct List of Chunk format
+        # Create initial state with chunks
 
-        kg_extractor = StateGraph(KgConstructionState, 
-                                  input=KgConstructionStateInput)
+        kg_extractor = StateGraph(KgConstructionState)
         # initial triplets extraction
         kg_extractor.add_node("get_triplets", self._node_agent_triplets)
         
@@ -181,30 +196,8 @@ class KgConstructionPipeline:
         workflow = kg_extractor.compile()
         
         # Execute the workflow
-        result = await workflow.ainvoke({"chunks": chunks})
+        result = await workflow.ainvoke(KgConstructionState(chunks=chunks))
         
         # Return the completed triplets
         return result["completed_triplets"]
-    
-    async def _run_chain_with_retries(self, chain: Runnable, chain_kwargs: Dict[str, Any], max_retry_attempts: Optional[int] = None) -> Optional[Any]:
-        retry_attempts = max_retry_attempts or self.max_retry_attempts
-        retry_delay = 2
-        attempt = 0
-        result = None
-
-        while attempt < retry_attempts:
-            try:
-                result = await chain.ainvoke(chain_kwargs)
-            except OutputParserException:
-                logger.warning("Parsing error occurred. Interrupting execution.")
-                raise
-            except APIConnectionError:
-                logger.warning(f"APIConnectionError. Attempt: {attempt}. Retrying after {retry_delay} seconds")
-                await asyncio.sleep(retry_delay)
-            except Exception as e:
-                logger.warning(f"Unexpected error during chain execution: {str(e)}")
-
-            attempt += 1
-
-        return result
 
