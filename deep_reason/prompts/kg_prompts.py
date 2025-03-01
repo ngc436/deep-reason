@@ -28,12 +28,11 @@ Other examples of triplets: 'room z, contains, black locker'; 'room x, has exit,
 Do not use 'none' as one of the entities. 
 If there is information that you read something, do not forget to incluse triplets that state that entity that you read contains information that you extract.
 
-Example of triplets you have extracted before: {example} Observation: {observation}
-
 Remember that triplets must be extracted in format:
-"subject\_1, relation\_1, object\_1; subject\_2, relation\_2, object\_2; ..."
-Extracted triplets:
+{response_format_description}
 """
+# Example of triplets you have extracted before: {example} Observation: {observation}
+
 
 PLANNER_PROMPT = """
 You are a brilliant planner agent for the triplet extraction task.

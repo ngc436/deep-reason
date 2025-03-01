@@ -2,6 +2,7 @@ import os
 import pandas as pd
 from deep_reason.schemes import Chunk
 from deep_reason.pipeline import KgConstructionPipeline
+import asyncio
 
 
 obliqa_dir = "datasets/ObliQA/StructuredRegulatoryDocuments"
@@ -17,15 +18,16 @@ def load_obliqa_dataset():
                                     order_id=ix))
     return all_chunks
 
-def main():
+async def main():
     # loading chunks
     chunks = load_obliqa_dataset()
 
     # initializing pipeline
-    pipeline = KgConstructionPipeline(tools=["web_search"])
+    pipeline = KgConstructionPipeline()
 
     # running pipeline
-    pipeline.get_knowledge_graph(chunks)
+    result = await pipeline.get_knowledge_graph(chunks)
+    print(result)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

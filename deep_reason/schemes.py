@@ -2,6 +2,14 @@ from pydantic import BaseModel, Field
 from typing import Annotated, Optional, List, Any, Dict
 from langchain_core.messages import BaseMessage, ToolMessage, AIMessage
 from langchain_core.documents import Document
+import uuid
+def uid_factory() -> str:
+    return str(uuid.uuid4())
+
+class PipelineEvent(BaseModel):
+    uid: str = Field(default_factory=uid_factory)
+    agent_id: str = Field(default_factory=uid_factory)
+    name: str
 
 class Triplet(BaseModel):
     subject: str = Field(description="Subject of the triplet")
@@ -24,7 +32,7 @@ class Chunk(BaseModel):
     text: str | None = Field(description="Text of the chunk")
     chapter_name: str | None = Field(description="Name of the chapter")
     document_id: int = Field(description="Id of the document")
-    order_id: int = Field(description="Order id of the chunk")
+    order_id: int = Field(description="Order id of the chunk in the document")
 
 def _take_any(a: Optional[Any], b: Optional[Any]) -> Optional[Any]:
     return a or b

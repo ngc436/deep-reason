@@ -1,10 +1,19 @@
-from deep_reason.tools.tools import WebSearchTool
+# from deep_reason.tools.tools import WebSearchTool
 from typing import List
-import pandas as pd
+# import pandas as pd
+import os
 from langgraph.graph import StateGraph, START, END
 from deep_reason.state import KgConstructionState, KgConstructionStateInput
 from deep_reason.prompts.kg_prompts import KG_PROMPT_VAR1
 from deep_reason.schemes import Chunk, Triplet
+# from langchain_core.rate_limiters import InMemoryRateLimiter
+from deep_reason.utils import VLLMChatOpenAI
+from deep_reason.envs import OPENAI_API_BASE, OPENAI_API_KEY
+# from langchain_openai import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate, PromptTemplate
+from langchain.output_parsers import RetryOutputParser, PydanticOutputParser
+from deep_reason.schemes import ChunkTripletsResult
+
 
 # web_tool = WebSearchTool(
 #         agent_id=web_tool_id,
@@ -27,9 +36,19 @@ from deep_reason.schemes import Chunk, Triplet
 #     )
 
 class KgConstructionPipeline:
-    def __init__(self):
-        pass
-        # self.tools = [self._get_tool(tool) for tool in tools]
+    def __init__(self, **model_kwargs):
+        self.llm = VLLMChatOpenAI(
+            model="/model",
+            base_url=os.environ[OPENAI_API_BASE],
+            api_key=os.environ[OPENAI_API_KEY],
+            temperature=model_kwargs.temperature if 'temperature' in model_kwargs else 0.3,
+            max_tokens=model_kwargs.max_tokens if 'max_tokens' in model_kwargs else 2048,
+            # rate_limiter=InMemoryRateLimiter(
+            #     requests_per_second=mparams.request_rate_limit, 
+            #     max_bucket_size=mparams.request_rate_limit
+            # )
+        )
+        self.max_retry_attempts = 3
 
     def _get_tool(self, tool_name: str):
         raise NotImplementedError("Not implemented")
@@ -46,45 +65,52 @@ class KgConstructionPipeline:
     async def _node_agent_triplets(self, state: KgConstructionState):
         '''
         Extract triplets from a set of chunks using LLM
-        Uses KG_PROMPT_VAR1 to prompt the LLM to extract triplets
         '''
-        from langchain_openai import ChatOpenAI
-        from langchain.prompts import PromptTemplate
-        from langchain.output_parsers import StrOutputParser
         
         # Initialize lists for collecting results
-        all_triplets = state.get("completed_triplets", [])
-        terms = state.get("found_terms", [])
-        instruments = state.get("used_instruments", [])
+        # all_triplets = state.get("completed_triplets", [])
+        # terms = state.get("found_terms", [])
+        # instruments = state.get("used_instruments", [])
+        all_triplets = []
+        terms = []
+        instruments = []
         
         # Add the triplet extraction instrument to the used instruments
         if "triplet_extraction" not in instruments:
             instruments.append("triplet_extraction")
         
-        # Initialize LLM from VLLM
-        llm = ChatOpenAI(
-            model="gpt-4",  # You should replace with your preferred model
-            temperature=0,
-            max_tokens=1024
-        )
+        parser = PydanticOutputParser(pydantic_object=ChunkTripletsResult)
         
         # Create the prompt template
-        prompt = PromptTemplate(
-            template=KG_PROMPT_VAR1,
-            input_variables=["example", "observation"]
+        prompt = ChatPromptTemplate(
+            messages=[
+                SystemMessagePromptTemplate.from_template(
+                    KG_PROMPT_VAR1.format(response_format_description="{response_format_description}")
+                ),
+                HumanMessagePromptTemplate.from_template(
+                    "{chunk}"
+                )
+            ]
         )
         
         # Example triplets to provide as an example
-        example_triplets = (
-            "apple, is a, fruit; apple, grows on, tree; "
-            "tree, has, leaves; tree, requires, water"
-        )
+        # example_triplets = (
+        #     "apple, is a, fruit; apple, grows on, tree; "
+        #     "tree, has, leaves; tree, requires, water"
+        # )
         
+        retry_planner_parser = RetryOutputParser.from_llm(
+            parser=parser,
+            llm=self.llm,
+            prompt=PromptTemplate.from_template("{prompt}"),
+            max_retries=self.max_retry_attempts,
+        )
+
         # Define the triplet extraction chain
         triplet_chain = (
             prompt | 
-            llm | 
-            StrOutputParser()
+            self.llm | 
+            RetryOutputParser(lambda x: self._do_parsing_retrying(x, retry_planner_parser), name='retry_planner_lambda')
         )
         
         # Process each chunk
@@ -92,11 +118,11 @@ class KgConstructionPipeline:
         for chunk in chunks:
             try:
                 # Extract triplets using LLM
-                triplet_text = await triplet_chain.ainvoke({
-                    "example": example_triplets,
-                    "observation": chunk.text if isinstance(chunk, Chunk) else chunk
-                })
-                
+                triplet_text = await self._run_chain_with_retries(
+                    chain=triplet_chain,
+                    chain_kwargs={"chunk": chunk.text},
+                    max_retry_attempts=3
+                )
                 # Parse the triplets from the text response
                 # Format should be "subject, relation, object; subject, relation, object; ..."
                 triplet_strings = triplet_text.split(";")
@@ -132,7 +158,7 @@ class KgConstructionPipeline:
             "used_instruments": instruments
         }
 
-    def get_knowledge_graph(self, chunks: List[Chunk]):
+    async def get_knowledge_graph(self, chunks: List[Chunk]):
         ''' Compile the knowledge graph from a set of chunks'''
 
         # transform input to the correct List of Chunk format
@@ -152,8 +178,30 @@ class KgConstructionPipeline:
         workflow = kg_extractor.compile()
         
         # Execute the workflow
-        result = workflow.invoke({"chunks": chunks})
+        result = await workflow.ainvoke({"chunks": chunks})
         
         # Return the completed triplets
         return result["completed_triplets"]
+    
+    async def _run_chain_with_retries(self, chain: Runnable, chain_kwargs: Dict[str, Any], max_retry_attempts: Optional[int] = None) -> Optional[Any]:
+        retry_attempts = max_retry_attempts or self.max_retry_attempts
+        retry_delay = 2
+        attempt = 0
+        result = None
+
+        while attempt < retry_attempts:
+            try:
+                result = await chain.ainvoke(chain_kwargs)
+            except OutputParserException:
+                logger.warning("Parsing error occurred. Interrupting execution.")
+                raise
+            except APIConnectionError:
+                logger.warning(f"APIConnectionError. Attempt: {attempt}. Retrying after {retry_delay} seconds")
+                await asyncio.sleep(retry_delay)
+            except Exception as e:
+                logger.warning(f"Unexpected error during chain execution: {str(e)}")
+
+            attempt += 1
+
+        return result
 

@@ -2,7 +2,7 @@
 name = "deep_reason"
 version = "0.1.0"
 description = ""
-authors = ["Maria Khodorchenko <mariyaxod@yandex.ru>"]
+authors = ["name <email>"]
 
 [tool.poetry.dependencies]
 python = ">=3.12,<3.13"
@@ -10,3 +10,4 @@ chromadb = "^0.6.3"
 langgraph = "^0.1.14"
 ttn-gpt-researcher = {git = "https://github.com/Industrial-AI-Research-Lab/ttn-gpt-researcher.git", branch = "main"}
 pandas = "^2.2.3"
+vllm = "^0.7.3"
