@@ -1,5 +1,5 @@
 # from deep_reason.tools.tools import WebSearchTool
-from typing import List
+from typing import List, Dict, Any, Optional
 # import pandas as pd
 import os
 from langgraph.graph import StateGraph, START, END
@@ -13,6 +13,13 @@ from deep_reason.envs import OPENAI_API_BASE, OPENAI_API_KEY
 from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate, PromptTemplate
 from langchain.output_parsers import RetryOutputParser, PydanticOutputParser
 from deep_reason.schemes import ChunkTripletsResult
+from langchain_core.runnables import Runnable, RunnableLambda
+from openai import APIConnectionError
+from langchain_core.exceptions import OutputParserException
+import logging
+import asyncio
+
+logger = logging.getLogger(__name__)
 
 
 # web_tool = WebSearchTool(
@@ -57,10 +64,6 @@ class KgConstructionPipeline:
         # else:
         #     raise ValueError(f"Tool {tool_name} not found")
 
-    async def _node_aget_triplets(self, 
-                                  state: KgConstructionState):
-        ''' Get triplets from a set of chunks'''
-        pass
 
     async def _node_agent_triplets(self, state: KgConstructionState):
         '''
@@ -110,7 +113,7 @@ class KgConstructionPipeline:
         triplet_chain = (
             prompt | 
             self.llm | 
-            RetryOutputParser(lambda x: self._do_parsing_retrying(x, retry_planner_parser), name='retry_planner_lambda')
+            RunnableLambda(lambda x: self._do_parsing_retrying(x, retry_planner_parser), name='retry_planner_lambda')
         )
         
         # Process each chunk
