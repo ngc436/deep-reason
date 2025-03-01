@@ -4,7 +4,7 @@ import json
 import logging
 import pandas as pd
 import os
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, cast, Union
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 import asyncio
@@ -19,6 +19,8 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable, RunnableLambda, RunnableParallel, RunnablePassthrough
 from langgraph.graph import StateGraph, START, END
 from langchain_core.language_models import LanguageModelInput
+from dataclasses import dataclass
+from itertools import groupby
 
 from deep_reason.envs import OPENAI_API_BASE, OPENAI_API_KEY
 from deep_reason.schemes import Chunk
@@ -36,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 class KGMiningWorkflowState(BaseModel):
     chunks: List[Chunk]
-
+    triplets: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 @contextmanager
@@ -101,8 +103,44 @@ def build_chain(llm: BaseChatModel,
     return chain
 
 
+@dataclass
+class ChunkTuple:
+    """Represents a tuple of chunks with current chunk and optional context chunks"""
+    current_chunk: Chunk
+    left_context: Optional[Chunk] = None
+    right_context: Optional[Chunk] = None
+
+
 def build_triplets_mining_chain(llm: BaseChatModel) -> Runnable:
-    raise NotImplementedError("Not implemented")
+    system_template = """You are an expert knowledge graph engineer. Extract knowledge triplets from the provided text chunk.
+A knowledge triplet consists of (subject, predicate, object) where:
+- subject is the entity performing the action or having the property
+- predicate is the relationship or action
+- object is the entity receiving the action or the value of the property
+
+Consider the context around the current chunk to ensure coherent extraction."""
+
+    human_template = """Extract knowledge triplets from the following text chunk:
+    
+Current chunk: {current_chunk}
+
+{left_context_prefix}{left_context}
+
+{right_context_prefix}{right_context}
+
+{response_format_description}"""
+
+    class Triplet(BaseModel):
+        subject: str = Field(description="The entity performing the action or having the property")
+        predicate: str = Field(description="The relationship or action")
+        object: str = Field(description="The entity receiving the action or the value of the property")
+    
+    class TripletList(BaseModel):
+        triplets: List[Triplet] = Field(description="List of knowledge triplets extracted from the text")
+    
+    parser = PydanticOutputParser(pydantic_object=TripletList)
+    
+    return build_chain(llm, system_template, human_template, parser)
 
 
 class KGConstructionAgent:
@@ -110,21 +148,61 @@ class KGConstructionAgent:
         self.llm = llm
 
     async def triplets_mining(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
-        # TODO: this function mines triplets from chunks
-        # 1. it takes the list of chunks from the state and ensure correct order of chunks using document_id and order_id
-        # 2. it splits the correctly ordered chunks into chunks tuples of 3 consecutive chunks each using sliding window.
-        #    This tuple contains the chunk being under consideration and "left" and "right" context. 
-        #    The subroutine for this should respect the following rules:
-        #    - use a dataclass to represent a tuple of 3 chunks with appropriatly named fields
-        #    - if the chunk is the very first one in the document we should process it with the right context only
-        #    - if the chunk is the very last one in the document we should process it with the left context only
-        # 3. it builds a chain that performs the actual mining by calling 'build_triplets_mining_chain' module-level function
-        # 4. it calls the chain with the list of chunk tuples using abatch methods (return_exceptions=True as a second argument)
-        # 5. it looks for exceptions in the results. Every exception should be logged on ERROR lebvel with exception info
-        # 6. it filters out all the exception from results and builds a new state object with the rest of results
-        # 7. it returns the new state object
-        raise NotImplementedError("Not implemented")
-
+        # 1. Order chunks by document_id and order_id
+        chunks = sorted(state.chunks, key=lambda x: (x.document_id, x.order_id))
+        
+        # 2. Create chunk tuples with sliding window approach
+        chunk_tuples = []
+        
+        # Group chunks by document_id
+        for doc_id, doc_chunks in groupby(chunks, key=lambda x: x.document_id):
+            doc_chunks_list = list(doc_chunks)
+            
+            for i, chunk in enumerate(doc_chunks_list):
+                left_context = None if i == 0 else doc_chunks_list[i-1]
+                right_context = None if i == len(doc_chunks_list) - 1 else doc_chunks_list[i+1]
+                
+                chunk_tuples.append(ChunkTuple(
+                    current_chunk=chunk,
+                    left_context=left_context,
+                    right_context=right_context
+                ))
+        
+        # 3. Build the triplet mining chain
+        chain = build_triplets_mining_chain(self.llm)
+        
+        # 4. Process chunk tuples using batch method
+        inputs = []
+        for ct in chunk_tuples:
+            input_dict = {
+                "current_chunk": ct.current_chunk.text,
+                "left_context_prefix": "Left context: " if ct.left_context else "No left context available.",
+                "left_context": ct.left_context.text if ct.left_context else "",
+                "right_context_prefix": "Right context: " if ct.right_context else "No right context available.",
+                "right_context": ct.right_context.text if ct.right_context else ""
+            }
+            inputs.append(input_dict)
+        
+        results = await chain.abatch(inputs, return_exceptions=True)
+        
+        # 5. Handle exceptions
+        valid_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Error processing chunk {chunk_tuples[i].current_chunk.chapter_name}: {result}")
+            else:
+                # Attach the chunk information to each result
+                for triplet in result.triplets:
+                    valid_results.append({
+                        "chunk": chunk_tuples[i].current_chunk,
+                        "triplet": triplet
+                    })
+        
+        # 6 & 7. Create and return new state with valid results
+        return KGMiningWorkflowState(
+            chunks=state.chunks,
+            triplets=valid_results
+        )
 
     async def ontology_and_kg_compiling(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
         raise NotImplementedError("Not implemented")
