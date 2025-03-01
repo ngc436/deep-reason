@@ -1,15 +1,12 @@
 # from deep_reason.tools.tools import WebSearchTool
 from typing import List, Dict, Any, Optional
-# import pandas as pd
 import os
 from langgraph.graph import StateGraph, START, END
 from deep_reason.state import KgConstructionState, KgConstructionStateInput
 from deep_reason.prompts.kg_prompts import KG_PROMPT_VAR1
 from deep_reason.schemes import Chunk, Triplet
-# from langchain_core.rate_limiters import InMemoryRateLimiter
 from deep_reason.utils import VLLMChatOpenAI
 from deep_reason.envs import OPENAI_API_BASE, OPENAI_API_KEY
-# from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate, PromptTemplate
 from langchain.output_parsers import RetryOutputParser, PydanticOutputParser
 from deep_reason.schemes import ChunkTripletsResult
@@ -44,7 +41,6 @@ logger = logging.getLogger(__name__)
 
 class KgConstructionPipeline:
     def __init__(self, **model_kwargs):
-        print(os.environ[OPENAI_API_BASE])
         self.llm = VLLMChatOpenAI(
             model="/model",
             base_url=os.environ[OPENAI_API_BASE],
@@ -118,7 +114,7 @@ class KgConstructionPipeline:
                 result = await self._run_chain_with_retries(
                     chain=triplet_chain,
                     chain_kwargs={
-                        "chunk": chunk.text if hasattr(chunk, 'text') else chunk,
+                        "chunk": chunk.text,
                         "response_format_description": parser.get_format_instructions()
                     },
                     max_retry_attempts=3
