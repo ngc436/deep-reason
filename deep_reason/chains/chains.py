@@ -143,6 +143,10 @@ Current chunk: {current_chunk}
     return build_chain(llm, system_template, human_template, parser)
 
 
+def build_ontology_and_kg_compiling_chain(llm: BaseChatModel) -> Runnable:
+    raise NotImplementedError("Not implemented")
+
+
 class KGConstructionAgent:
     def __init__(self, llm: BaseChatModel):
         self.llm = llm
@@ -205,6 +209,16 @@ class KGConstructionAgent:
         )
 
     async def ontology_and_kg_compiling(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
+        # TODO: On this step we want to process the triplets obtained from the previous 'triplets_mining' step
+        # 1. We take triplets and split them into batches that can be processed by LLM at once. 
+        # We are limited here by the context window of the LLM. The length of this window is a field of this class 'context_window_length' and being set in the constructor.
+        # 2. We build a chain that will be used to process each batch using function 'build_ontology_and_kg_compiling_chain'.
+        # 3. This chain accepts as arguments a batch, a current version of the ontology and a current version of the knowledge graph.
+        # If this is the first batch, the ontology and the knowledge graph are empty.
+        # 4. We process our sequence of batches one by one using so called 'refine' technique.
+        # this technique is a way to iteratively improve the ontology and the knowledge graph by adding new information from triples.
+        # 5. If there is Exception on some iteration we caught it, log it and raise our own exception.
+        # 6. If there is no Exception we return the new state with the updated ontology and the knowledge graph.
         raise NotImplementedError("Not implemented")
 
 
