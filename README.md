@@ -1,7 +1,7 @@
 # deep-reason
 DeepReason library for knowledge extraction
 
-Expected input to kg pipelint is a list of Chunks with the following fields:
+Expected input to kg pipeline is a list of Chunks with the following fields:
 
 ```json
 {

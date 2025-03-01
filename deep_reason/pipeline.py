@@ -77,6 +77,13 @@ class KgConstructionPipeline:
             instruments.append("triplet_extraction")
         
         parser = PydanticOutputParser(pydantic_object=ChunkTripletsResult)
+
+        retry_planner_parser = RetryOutputParser.from_llm(
+            parser=parser,
+            llm=self.llm,
+            prompt=PromptTemplate.from_template("{prompt}"),
+            max_retries=self.max_retry_attempts
+        )
         
         # Create the prompt template
         prompt = ChatPromptTemplate(
@@ -89,13 +96,6 @@ class KgConstructionPipeline:
                 )
             ]
         )
-        
-        retry_planner_parser = RetryOutputParser.from_llm(
-            parser=parser,
-            llm=self.llm,
-            prompt=PromptTemplate.from_template("{prompt}"),
-            max_retries=self.max_retry_attempts,
-        )
 
         # Define the triplet extraction chain
         triplet_chain = (
@@ -104,10 +104,8 @@ class KgConstructionPipeline:
             RunnableLambda(lambda x: self._do_parsing_retrying(x, retry_planner_parser), name='retry_planner_lambda')
         )
         
-        # Access chunks directly from state object if it's a Pydantic model
-        # or access using attribute notation for regular objects
         chunks = state.chunks if hasattr(state, 'chunks') else state.get("chunks", [])
-        print(chunks[0])
+
         for chunk in chunks:
             try:
                 # Extract triplets using LLM
@@ -117,9 +115,9 @@ class KgConstructionPipeline:
                         "chunk": chunk.text,
                         "response_format_description": parser.get_format_instructions()
                     },
-                    max_retry_attempts=3
+                    max_retry_attempts=self.max_retry_attempts
                 )
-                            
+                all_triplets.extend(result.triplets)
             except Exception as e:
                 # Log the error but continue processing other chunks
                 logger.warning(f"Error processing chunk: {e}")
@@ -145,11 +143,11 @@ class KgConstructionPipeline:
                 logger.warning("Parsing error occurred. Interrupting execution.")
                 raise
             except APIConnectionError:
-                logger.warning(f"APIConnectionError. Attempt: {attempt + 1}/{retry_attempts}. Retrying after {retry_delay} seconds")
+                logger.warning(f"APIConnectionError. Attempt: {attempt + 1}/{retry_attempts}. Retrying after {retry_delay} seconds", exc_info=True)
                 await asyncio.sleep(retry_delay)
                 retry_delay *= 1.5  # Exponential backoff
             except Exception as e:
-                logger.warning(f"Unexpected error during chain execution: {str(e)}")
+                logger.warning(f"Unexpected error during chain execution: {str(e)}", exc_info=True)
             
             attempt += 1
         
