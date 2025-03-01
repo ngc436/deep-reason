@@ -11,3 +11,4 @@ langgraph = "^0.1.14"
 ttn-gpt-researcher = {git = "https://github.com/Industrial-AI-Research-Lab/ttn-gpt-researcher.git", branch = "main"}
 pandas = "^2.2.3"
 vllm = "^0.7.3"
+click = "^8.1.8"
