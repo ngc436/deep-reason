@@ -140,7 +140,7 @@ def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable['Aggregation
     human_template = """Process the following knowledge triplets to create or refine an ontology:
 
     Triplets:
-    {kg_triplet_list}
+    {triplet_list}
 
     Current Ontology:
     {current_ontology}
@@ -303,7 +303,7 @@ class Refiner(AggregationHelper, Runnable[AggregationInput, Dict[str, Any]]):
             except Exception as e:
                 # Handle exceptions
                 error_msg = f"Error processing {batch_name} batch {batch_idx}: {str(e)}"
-                logger.error(error_msg)
+                logger.error(error_msg, exc_info=True)
                 raise KGConstructionAgentException(error_msg)
 
         return current_state
@@ -464,7 +464,7 @@ class TripletsMiner(Runnable):
                 )
         
         # 6. Sort triplets by document and then chunk order
-        valid_results = [triplet for _, _, triplet in sorted(valid_results)]
+        valid_results = [triplet for _, _, triplet in sorted(valid_results, key=lambda x: (x[0], x[1]))]
         
         return valid_results
     

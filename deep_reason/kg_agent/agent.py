@@ -159,28 +159,28 @@ async def run_kg_mining(llm: BaseChatModel, chunks: List[Chunk], output_path: st
 
     k = 0
 
-    # kg_path = "/tmp/kg.pickle"
-    # if os.path.exists(kg_path):
-    #     chain = MapReducer(
-    #         map_chain=build_kg_refining_map_chain(llm),
-    #         reduce_chain=reduce_partial_kg,
-    #         tokenizer=None,
-    #         context_window_length=25_000
-    #     )
-    #     agg_input = AggregationInput(
-    #         items=valid_results,
-    #         input={
-    #             "ontology": current_ontology,
-    #             "current_graph": None
-    #         }
-    #     )
-    #     result = await chain.ainvoke(input=agg_input, config=None)
-    #     current_kg = result["current_graph"]
-    #     with open(kg_path, "wb") as f:  
-    #         pickle.dump(current_kg, f)
-    # else:
-    #     with open(kg_path, "rb") as f:
-    #         current_kg = pickle.load(f)
+    kg_path = "/tmp/kg.pickle"
+    if os.path.exists(kg_path):
+        chain = MapReducer(
+            map_chain=build_kg_refining_map_chain(llm),
+            reduce_chain=reduce_partial_kg,
+            tokenizer=None,
+            context_window_length=25_000
+        )
+        agg_input = AggregationInput(
+            items=valid_results,
+            input={
+                "ontology": current_ontology,
+                "current_graph": None
+            }
+        )
+        result = await chain.ainvoke(input=agg_input, config=None)
+        current_kg = result["current_graph"]
+        with open(kg_path, "wb") as f:  
+            pickle.dump(current_kg, f)
+    else:
+        with open(kg_path, "rb") as f:
+            current_kg = pickle.load(f)
     
     return
 
@@ -212,7 +212,7 @@ def main():
         base_url=os.environ[OPENAI_API_BASE],
         api_key=os.environ[OPENAI_API_KEY],
         temperature=0.3,
-        max_tokens=2048
+        max_tokens=8096
     )
 
     chunks = load_obliqa_dataset(obliqa_dir="datasets/ObliQA/StructuredRegulatoryDocuments")
