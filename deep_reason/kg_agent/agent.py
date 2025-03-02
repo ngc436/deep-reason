@@ -44,7 +44,7 @@ class KGConstructionAgent:
         
         # Check cache first
         cached_result = self.cache_manager.get(state.chunks, TripletList, prefix="triplets")
-        if cached_result or not state.no_cache:
+        if cached_result and not state.no_cache:
             logger.info(f"Using cached triplets mining result")
             return state.model_copy(update={"triplets": cached_result.triplets})
             
