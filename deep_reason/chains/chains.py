@@ -174,43 +174,46 @@ def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable:
     return build_chain(llm, system_template, human_template, parser)
 
 
-def build_ontology_and_kg_compiling_chain(llm: BaseChatModel) -> Runnable:
-    system_template = """You are an expert knowledge graph engineer. Your task is to organize extracted knowledge triplets into:
-1. An ontology - categorizing entities and relationships
-2. A structured knowledge graph
+def build_kg_refining_chain(llm: BaseChatModel) -> Runnable:
+    system_template = """You are an expert knowledge graph engineer. Your task is to build a knowledge graph using the provided triplets and ontology.
 
-Process the given triplets and incrementally build or refine the existing ontology and knowledge graph."""
+    The knowledge graph consists of:
+    1. Entities - unique nodes in the graph with types from the ontology
+    2. Relationships - connections between entities based on the triplets
+    
+    Use the ontology to categorize entities and relationships appropriately. Do not modify the ontology."""
 
-    human_template = """Process the following knowledge triplets:
+    human_template = """Process the following knowledge triplets to build or refine a knowledge graph:
 
-{triplets}
+    {triplets}
 
-Current Ontology (entities and relationships organized by category):
-{current_ontology}
+    Current Ontology (DO NOT MODIFY):
+    {current_ontology}
 
-Current Knowledge Graph:
-{current_kg}
+    Current Knowledge Graph:
+    {current_kg}
 
-Please analyze these triplets and update both the ontology and knowledge graph.
-{response_format_description}"""
+    Compile or refine the knowledge graph based on these triplets and the existing ontology.
+    {response_format_description}"""
 
     class Entity(BaseModel):
-        entity_id: str = Field(description="Unique identifier for the entity")
-        name: str = Field(description="Name or label of the entity")
-        category: str = Field(description="Category or type of the entity")
+        id: str = Field(description="Unique identifier for the entity")
+        name: str = Field(description="Entity name or label")
+        type: str = Field(description="Entity type from the ontology")
+        properties: Dict[str, str] = Field(description="Additional properties for the entity", default_factory=dict)
 
     class Relationship(BaseModel):
-        source_id: str = Field(description="Entity ID of the source/subject")
-        relation_type: str = Field(description="Type of relationship/predicate")
-        target_id: str = Field(description="Entity ID of the target/object")
-        confidence: float = Field(description="Confidence score between 0 and 1", ge=0, le=1)
+        id: str = Field(description="Unique identifier for the relationship")
+        source: str = Field(description="Source entity ID")
+        target: str = Field(description="Target entity ID")
+        type: str = Field(description="Relationship type from the ontology")
+        properties: Dict[str, str] = Field(description="Additional properties for the relationship", default_factory=dict)
 
-    class OntologyAndKG(BaseModel):
-        ontology: Dict[str, List[str]] = Field(description="Categories of entities and relationships")
-        entities: List[Entity] = Field(description="List of entities in the knowledge graph")
-        relationships: List[Relationship] = Field(description="List of relationships in the knowledge graph")
+    class KnowledgeGraph(BaseModel):
+        entities: List[Entity] = Field(description="Entities in the knowledge graph")
+        relationships: List[Relationship] = Field(description="Relationships between entities")
     
-    parser = PydanticOutputParser(pydantic_object=OntologyAndKG)
+    parser = PydanticOutputParser(pydantic_object=KnowledgeGraph)
     
     return build_chain(llm, system_template, human_template, parser)
 
@@ -402,10 +405,10 @@ class KGConstructionAgent:
         
         return current_result
 
-    async def ontology_mining(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
+    async def ontology_refining(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
         # 0. Check for empty triplets
         if not state.triplets:
-            logger.warning("No triplets found in state, cannot construct ontology")
+            logger.error("No triplets found in state, cannot construct ontology")
             raise KGConstructionAgentException("Cannot construct ontology from empty triplets")
         
         # 1. Build the chain for ontology refinement
@@ -427,45 +430,47 @@ class KGConstructionAgent:
             knowledge_graph=state.knowledge_graph
         )
 
-    async def ontology_and_kg_compiling(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
-        if not state.triplets:
-            logger.warning("No triplets found in state, skipping ontology and kg compilation")
-            return state
+    async def kg_refining(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
+        # 0. Check for empty triplets
+        if not state.triplets or not state.ontology:
+            logger.error("No triplets or ontology found in state")
+            raise KGConstructionAgentException("Cannot build knowledge graph without triplets and ontology")
         
-        # Build the chain for ontology and KG compilation
-        chain = build_ontology_and_kg_compiling_chain(self.llm)
+        # 1. Check for empty ontology
+        if not state.ontology:
+            logger.warning("No ontology found in state, cannot build knowledge graph")
+            raise KGConstructionAgentException("Cannot build knowledge graph without ontology")
         
-        # Sort triplets by document and then chunk order
-        sorted_triplets = sorted(
-            state.triplets, 
-            key=lambda x: (x["chunk"].document_id, x["chunk"].order_id)
-        )
+        # 2. Build the chain for knowledge graph refinement
+        chain = build_kg_refining_chain(self.llm)
         
-        # Process triplets in batches
+        # 3. Process triplets in batches using the same helper method as ontology_refining
         current_kg = await self._refine_in_batches(
             chain=chain,
-            items=sorted_triplets,
-            current_result={"ontology": {}, "entities": [], "relationships": []},
+            items=state.triplets,
+            current_result={"entities": [], "relationships": []},
             batch_type="knowledge graph"
         )
         
-        # Return updated state
+        # 4. Return updated state with the refined knowledge graph
         return KGMiningWorkflowState(
             chunks=state.chunks,
             triplets=state.triplets,
-            ontology=current_kg.get("ontology", {}),
-            knowledge_graph={"entities": current_kg.get("entities", []), "relationships": current_kg.get("relationships", [])}
+            ontology=state.ontology,  # Keep the existing ontology
+            knowledge_graph=current_kg
         )
 
     def build_wf(self) -> Runnable[KGMiningWorkflowState, Dict[str, Any]]:
         wf = StateGraph(KGMiningWorkflowState)
         
         wf.add_node("triplets_mining", self.triplets_mining)
-        wf.add_node("ontology_and_kg_compiling", self.ontology_and_kg_compiling)
+        wf.add_node("ontology_refining", self.ontology_refining)
+        wf.add_node("kg_refining", self.kg_refining)
 
         wf.add_edge(START, "triplets_mining")
-        wf.add_edge("triplets_mining", "ontology_and_kg_compiling")
-        wf.add_edge("ontology_and_kg_compiling", END)
+        wf.add_edge("triplets_mining", "ontology_refining")
+        wf.add_edge("ontology_refining", "kg_refining")
+        wf.add_edge("kg_refining", END)
 
         return wf.compile()
 
