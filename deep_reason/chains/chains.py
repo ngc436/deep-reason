@@ -156,52 +156,52 @@ Current chunk: {current_chunk}
     
     return build_chain(llm, system_template, human_template, parser)
 
-def build_kg_construction_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict[str, Any]]:
-    system_template = """You are an expert knowledge graph engineer. Your task is to organize knowledge triplets 
-    by deduplicating entities and relationships that refer to the same concept.
+# def build_kg_construction_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict[str, Any]]:
+#     system_template = """You are an expert knowledge graph engineer. Your task is to organize knowledge triplets 
+#     by deduplicating entities and relationships that refer to the same concept.
 
-    For each triplet (subject, predicate, object):
-    1. Identify when different subjects or objects refer to the same entity
-    2. Identify when different predicates express the same relationship
-    3. Create a normalized representation by combining similar entities and relationships
+#     For each triplet (subject, predicate, object):
+#     1. Identify when different subjects or objects refer to the same entity
+#     2. Identify when different predicates express the same relationship
+#     3. Create a normalized representation by combining similar entities and relationships
     
-    The goal is to create a more cohesive and less redundant set of triplets where:
-    - Multiple variations of the same entity name are consolidated (e.g., "John Smith", "J. Smith", "Mr. Smith" → "John Smith")
-    - Equivalent relationships are standardized (e.g., "works for", "is employed by", "works at" → "works for")
+#     The goal is to create a more cohesive and less redundant set of triplets where:
+#     - Multiple variations of the same entity name are consolidated (e.g., "John Smith", "J. Smith", "Mr. Smith" → "John Smith")
+#     - Equivalent relationships are standardized (e.g., "works for", "is employed by", "works at" → "works for")
     
-    Your response should be in the following format:
-    {response_format_description}"""
+#     Your response should be in the following format:
+#     {response_format_description}"""
 
-    human_template = """Process the following knowledge triplets to deduplicate entities and relationships:
+#     human_template = """Process the following knowledge triplets to deduplicate entities and relationships:
 
-    Triplets:
-    {triplet_list}
+#     Triplets:
+#     {triplet_list}
 
-    Identify similar entities and relationships, and provide a normalized representation.
-    {response_format_description}"""
+#     Identify similar entities and relationships, and provide a normalized representation.
+#     {response_format_description}"""
     
-    parser = PydanticOutputParser(pydantic_object=KgTripletList)
+#     parser = PydanticOutputParser(pydantic_object=KgTripletList)
     
-    chain = build_chain(llm, system_template, human_template, parser)
+#     chain = build_chain(llm, system_template, human_template, parser)
     
-    def _process_input(refiner_input: RefinerInput):
-        # Extract triplets from items list
-        formatted_triplets = "\n".join([
-            f"- Subject: {item.subject}, Predicate: {item.predicate}, Object: {item.object}"
-            for item in refiner_input.items
-        ])
+#     def _process_input(refiner_input: RefinerInput):
+#         # Extract triplets from items list
+#         formatted_triplets = "\n".join([
+#             f"- Subject: {item.subject}, Predicate: {item.predicate}, Object: {item.object}"
+#             for item in refiner_input.items
+#         ])
         
-        return {
-            "triplet_list": formatted_triplets
-        }
+#         return {
+#             "triplet_list": formatted_triplets
+#         }
     
-    def _process_output(result: KgTripletList) -> Dict[str, Any]:
-        # Return the deduplicated triplets
-        return {
-            "kg_triplet_list": result.kg_triplets
-        }
+#     def _process_output(result: KgTripletList) -> Dict[str, Any]:
+#         # Return the deduplicated triplets
+#         return {
+#             "kg_triplet_list": result.kg_triplets
+#         }
     
-    return RunnableLambda(_process_input) | chain | RunnableLambda(_process_output)
+#     return RunnableLambda(_process_input) | chain | RunnableLambda(_process_output)
 
 
 def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict[str, Any]]:
@@ -239,6 +239,11 @@ def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable['RefinerInpu
     
     def _process_input(refiner_input: RefinerInput):
         # Extract triplets from items list
+        current_ontology = refiner_input.input.get("current_ontology", None)
+        if not current_ontology:
+            logger.info("No current ontology provided, creating empty ontology")
+            current_ontology = OntologyStructure(nodes=[], relations=[], connections=[])
+        
         formatted_triplets = "\n".join([
             f"- Subject: {item.subject}, Predicate: {item.predicate}, Object: {item.object}"
             for item in refiner_input.items
@@ -246,12 +251,12 @@ def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable['RefinerInpu
         
         return {
             "triplet_list": formatted_triplets,
-            "current_ontology": refiner_input.input.get("current_ontology", {})
+            "current_ontology": current_ontology
         }
     
     def _process_output(result: OntologyStructure) -> Dict[str, Any]:
         # Extract the ontology dictionary to be used in the next iteration
-        return result.ontology
+        return { "current_ontology": result }
     
     return RunnableLambda(_process_input) | chain | RunnableLambda(_process_output)
 
@@ -278,14 +283,23 @@ def build_kg_refining_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict
     {ontology}
 
     Current Knowledge Graph:
-    {kg_triplet_list}
+    {current_graph}
     """
     
-    parser = PydanticOutputParser(pydantic_object=KgTripletList)
+    parser = PydanticOutputParser(pydantic_object=KgStructure)
     
     chain = build_chain(llm, system_template, human_template, parser)
     
     def _process_input(refiner_input: RefinerInput):
+        ontology = refiner_input.input.get("ontology", None)
+        if not ontology:
+            raise KGConstructionAgentException("No ontology provided for kg refining chain")
+        
+        current_graph = refiner_input.input.get("current_graph", None)
+        if not current_graph:
+            logger.info("No current graph provided, creating empty graph")
+            current_graph = KgStructure(kg_triplets=[])
+
         # Extract triplets from items list
         formatted_triplets = "\n".join([
             f"- Subject: {item.subject}, Predicate: {item.predicate}, Object: {item.object}"
@@ -294,17 +308,24 @@ def build_kg_refining_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict
         
         return {
             "triplet_list": formatted_triplets,
-            "ontology": refiner_input.input.get("ontology", {}),
-            "kg_triplet_list": refiner_input.input.get("kg_triplet_list", [])
+            "ontology": ontology,
+            "current_graph": current_graph
         }
     
-    def _process_output(result: KgTripletList) -> Dict[str, Any]:
+    def _process_output(x: Dict[str, Any]) -> Dict[str, Any]:
         # Return a dictionary with entities and relationships for the next iteration
+        result = x["result"]
+        ontology = x["inputs"]["ontology"]
         return {
-            "kg_triplet_list": result.kg_triplets
+            "ontology": ontology,
+            "current_graph": result
         }
     
-    return RunnableLambda(_process_input) | chain | RunnableLambda(_process_output)
+    return (
+        RunnableLambda(_process_input) 
+        | RunnableParallel(result=chain, inputs=RunnablePassthrough()) 
+        | RunnableLambda(_process_output)
+    )
 
 # Raw triplets
 class Triplet(BaseModel):
