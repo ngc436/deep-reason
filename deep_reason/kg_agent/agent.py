@@ -36,10 +36,11 @@ class KGConstructionAgent:
         self.use_refine_for_kg = use_refine_for_kg
 
     async def _triplets_mining(self, state: KGMiningWorkflowState, config: Optional[Dict[str, Any]] = None) -> KGMiningWorkflowState:
+        logger.info(f"Mining triplets for {len(state.chunks)} chunks")
         # Use the TripletsMiner class to extract triplets from chunks
         miner = TripletsMiner(self.llm)
         valid_results = await miner.ainvoke(state.chunks, config=config)
-        
+        logger.info(f"Finished mining triplets. Found {len(valid_results)} triplets")
         # Create and return new state with valid results
         return KGMiningWorkflowState(
             chunks=state.chunks,
@@ -49,6 +50,7 @@ class KGConstructionAgent:
         )
     
     async def _ontology_refining(self, state: KGMiningWorkflowState, config: Optional[Dict[str, Any]] = None) -> KGMiningWorkflowState:
+        logger.info(f"Refining ontology for {len(state.triplets)} triplets")
         # Check for empty triplets
         if not state.triplets:
             logger.error("No triplets found in state, cannot construct ontology")
@@ -62,6 +64,7 @@ class KGConstructionAgent:
         refiner_input = AggregationInput(items=state.triplets, input={"current_ontology": None})
         result = await refiner.ainvoke(input=refiner_input, config=config)
         current_ontology = result["current_ontology"]
+        logger.info(f"Finished refining ontology. Found {len(current_ontology.nodes)} nodes and {len(current_ontology.relations)} relations")
 
         # Return updated state with the refined ontology
         return KGMiningWorkflowState(
@@ -72,6 +75,7 @@ class KGConstructionAgent:
         )
 
     async def _kg_refining(self, state: KGMiningWorkflowState, config: Optional[Dict[str, Any]] = None) -> KGMiningWorkflowState:
+        logger.info(f"Refining knowledge graph for {len(state.triplets)} triplets")
         # Check for empty triplets or ontology
         if not state.triplets:
             logger.error("No triplets found in state, cannot build knowledge graph")
@@ -104,7 +108,7 @@ class KGConstructionAgent:
         )
         result = await chain.ainvoke(input=agg_input, config=config)
         current_kg = result["current_graph"]
-        
+        logger.info(f"Finished refining knowledge graph. Found {len(current_kg.kg_nodes)} nodes and {len(current_kg.kg_triplets)} triplets")
         # Return updated state with the refined knowledge graph
         return KGMiningWorkflowState(
             chunks=state.chunks,
@@ -213,7 +217,7 @@ def main():
 
     chunks = load_obliqa_dataset(obliqa_dir="datasets/ObliQA/StructuredRegulatoryDocuments")
 
-    asyncio.run(run_kg_mining(llm, chunks))
+    asyncio.run(run_kg_mining(llm, chunks[:10]))
 
 if __name__ == "__main__":
     logging.basicConfig(
