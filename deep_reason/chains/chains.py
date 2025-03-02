@@ -135,7 +135,7 @@ There could be connections between distinct parts of observations.
 For example if there is information in the beginning of the observation that you are in location, and in the end it states that there is an exit to the east, you should extract triplet: 'location, has exit, east'. Several triplets can be extracted, that contain information about the same node. For example 'kitchen, contains, apple', 'kitchen, contains, table', 'apple, is on, table'.
 
 Do not miss this type of connections. 
-Other examples of triplets: 'room z, contains, black locker'; 'room x, has exit, east', 'apple, is on, table', 'key, is in, locker', 'apple, to be, grilled', 'potato, to be, sliced', ’stove, used for, frying’, ’recipe, requires, green apple’, ’recipe, requires, potato’. Do not include triplets that state the current location of an agent like ’you, are in, location’. 
+Other examples of triplets: 'room z, contains, black locker'; 'room x, has exit, east', 'apple, is on, table', 'key, is in, locker', 'apple, to be, grilled', 'potato, to be, sliced', 'stove, used for, frying', 'recipe, requires, green apple', 'recipe, requires, potato'. Do not include triplets that state the current location of an agent like 'you, are in, location'. 
 Do not use 'none' as one of the entities. 
 If there is information that you read something, do not forget to incluse triplets that state that entity that you read contains information that you extract.
 
@@ -155,6 +155,53 @@ Current chunk: {current_chunk}
     parser = PydanticOutputParser(pydantic_object=TripletList)
     
     return build_chain(llm, system_template, human_template, parser)
+
+def build_kg_construction_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict[str, Any]]:
+    system_template = """You are an expert knowledge graph engineer. Your task is to organize knowledge triplets 
+    by deduplicating entities and relationships that refer to the same concept.
+
+    For each triplet (subject, predicate, object):
+    1. Identify when different subjects or objects refer to the same entity
+    2. Identify when different predicates express the same relationship
+    3. Create a normalized representation by combining similar entities and relationships
+    
+    The goal is to create a more cohesive and less redundant set of triplets where:
+    - Multiple variations of the same entity name are consolidated (e.g., "John Smith", "J. Smith", "Mr. Smith" → "John Smith")
+    - Equivalent relationships are standardized (e.g., "works for", "is employed by", "works at" → "works for")
+    
+    Your response should be in the following format:
+    {response_format_description}"""
+
+    human_template = """Process the following knowledge triplets to deduplicate entities and relationships:
+
+    Triplets:
+    {triplet_list}
+
+    Identify similar entities and relationships, and provide a normalized representation.
+    {response_format_description}"""
+    
+    parser = PydanticOutputParser(pydantic_object=TripletList)
+    
+    chain = build_chain(llm, system_template, human_template, parser)
+    
+    def _process_input(refiner_input: RefinerInput):
+        # Extract triplets from items list
+        formatted_triplets = "\n".join([
+            f"- Subject: {item.subject}, Predicate: {item.predicate}, Object: {item.object}"
+            for item in refiner_input.items
+        ])
+        
+        return {
+            "triplet_list": formatted_triplets
+        }
+    
+    def _process_output(result: TripletList) -> Dict[str, Any]:
+        # Return the deduplicated triplets
+        return {
+            "deduplicated_triplets": result.triplets
+        }
+    
+    return RunnableLambda(_process_input) | chain | RunnableLambda(_process_output)
 
 
 def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict[str, Any]]:
@@ -178,7 +225,7 @@ def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable['RefinerInpu
     human_template = """Process the following knowledge triplets to create or refine an ontology:
 
     Triplets:
-    {triplet_list}
+    {kg_triplet_list}
 
     Current Ontology:
     {current_ontology}
@@ -212,11 +259,12 @@ def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable['RefinerInpu
 def build_kg_refining_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict[str, Any]]:
     system_template = """You are an expert knowledge graph engineer. Your task is to build a knowledge graph using the provided triplets and ontology.
 
-    The knowledge graph consists of:
+    The knowledge graph consists of a set of triplets that contain:
     1. Entities - unique nodes in the graph with types from the ontology
     2. Relationships - connections between entities based on the triplets
     
     Use the ontology to categorize entities and relationships appropriately. Do not modify the ontology.
+    Reduce the amount of relationships in current knowledge graph if possible and update the corresponding triplet_ids field.
     
     Compile or refine the knowledge graph based on these triplets and the existing ontology.
     {response_format_description}"""
@@ -230,11 +278,10 @@ def build_kg_refining_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict
     {ontology}
 
     Current Knowledge Graph:
-    Entities: {entities}
-    Relationships: {relationships}
+    {kg_triplet_list}
     """
     
-    parser = PydanticOutputParser(pydantic_object=KnowledgeGraph)
+    parser = PydanticOutputParser(pydantic_object=KgTripletList)
     
     chain = build_chain(llm, system_template, human_template, parser)
     
@@ -248,15 +295,13 @@ def build_kg_refining_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict
         return {
             "triplet_list": formatted_triplets,
             "ontology": refiner_input.input.get("ontology", {}),
-            "entities": refiner_input.input.get("entities", []),
-            "relationships": refiner_input.input.get("relationships", [])
+            "kg_triplet_list": refiner_input.input.get("kg_triplet_list", [])
         }
     
-    def _process_output(result: KnowledgeGraph) -> Dict[str, Any]:
+    def _process_output(result: KgTripletList) -> Dict[str, Any]:
         # Return a dictionary with entities and relationships for the next iteration
         return {
-            "entities": [entity.model_dump() for entity in result.entities],
-            "relationships": [relationship.model_dump() for relationship in result.relationships]
+            "kg_triplet_list": result.kg_triplets
         }
     
     return RunnableLambda(_process_input) | chain | RunnableLambda(_process_output)
@@ -284,33 +329,42 @@ class OntologyStructure(BaseModel):
     ontology: Dict[OntologyNode, List[OntologyNodeConnection]] = Field(description="Categories of entities and relationships")
 
 class Triplet(BaseModel):
-    subject: str = Field(description="The entity performing the action or having the property")
-    predicate: str = Field(description="The relationship or action")
-    object: str = Field(description="The entity receiving the action or the value of the property")
-
+    triplet_id: str = Field(description="Unique identifier for the triplet")
+    chunk_id: str = Field(description="Unique identifier for the chunk where the triplet was found")
+    subject: str = Field(description="The entity performing the action or having the property considering the chunk")
+    predicate: str = Field(description="The relationship or action considering the chunk")
+    object: str = Field(description="The entity receiving the action or the value of the property considering the chunk")
 
 class TripletList(BaseModel):
     triplets: List[Triplet] = Field(description="List of knowledge triplets extracted from the text")
 
+class KgTriplet(BaseModel):
+    kg_subject: str = Field(description="The entity performing the action or having the property")
+    kg_relation: str = Field(description="The relationship or action")
+    kg_object: str = Field(description="The entity receiving the action or the value of the property")
+    triplet_ids: List[str] = Field(description="Unique identifiers for the triplets that are combined to form this knowledge graph triplet")
 
-class Entity(BaseModel):
-    id: str = Field(description="Unique identifier for the entity")
-    name: str = Field(description="Entity name or label")
-    type: str = Field(description="Entity type from the ontology")
-    properties: Dict[str, str] = Field(description="Additional properties for the entity", default_factory=dict)
+class KgTripletList(BaseModel):
+    kg_triplets: List[KgTriplet] = Field(description="List of knowledge graph triplets combined from raw initial triplets")
+
+# class Entity(BaseModel):
+#     id: str = Field(description="Unique identifier for the entity")
+#     name: str = Field(description="Entity name or label")
+#     type: str = Field(description="Entity type from the ontology")
+#     properties: Dict[str, str] = Field(description="Additional properties for the entity", default_factory=dict)
 
 
-class Relationship(BaseModel):
-    id: str = Field(description="Unique identifier for the relationship")
-    source: str = Field(description="Source entity ID")
-    target: str = Field(description="Target entity ID")
-    type: str = Field(description="Relationship type from the ontology")
-    properties: Dict[str, str] = Field(description="Additional properties for the relationship", default_factory=dict)
+# class Relationship(BaseModel):
+#     id: str = Field(description="Unique identifier for the relationship")
+#     source: str = Field(description="Source entity ID")
+#     target: str = Field(description="Target entity ID")
+#     type: str = Field(description="Relationship type from the ontology")
+#     properties: Dict[str, str] = Field(description="Additional properties for the relationship", default_factory=dict)
 
 
-class KnowledgeGraph(BaseModel):
-    entities: List[Entity] = Field(description="Entities in the knowledge graph")
-    relationships: List[Relationship] = Field(description="Relationships between entities")
+# class KnowledgeGraph(BaseModel):
+#     entities: List[Entity] = Field(description="Entities in the knowledge graph")
+#     relationships: List[Relationship] = Field(description="Relationships between entities")
 
 
 class KGMiningWorkflowState(BaseModel):
