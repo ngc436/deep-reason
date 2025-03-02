@@ -421,7 +421,7 @@ class TripletsMiner(Runnable):
         chunk_tuples = []
         
         # Group chunks by document_id
-        for doc_id, doc_chunks in groupby(chunks, key=lambda x: x.document_id):
+        for _, doc_chunks in groupby(chunks, key=lambda x: x.document_id):
             doc_chunks_list = list(doc_chunks)
             
             for i, chunk in enumerate(doc_chunks_list):
@@ -453,22 +453,18 @@ class TripletsMiner(Runnable):
         
         # 5. Handle exceptions
         valid_results = []
-        for i, result in enumerate(results):
+        for chunk_tuple, result in zip(chunk_tuples, results):
             if isinstance(result, Exception):
-                logger.error(f"Error processing chunk {chunk_tuples[i].current_chunk.chapter_name}: {result}")
-            else:
-                # Attach the chunk information to each result
-                for triplet in result.triplets:
-                    valid_results.append({
-                        "chunk": chunk_tuples[i].current_chunk,
-                        "triplet": triplet
-                    })
+                logger.error(f"Error processing chunk {chunk_tuple.current_chunk.chapter_name}: {result}. Skipping chunk.")
+                continue
+            # Attach the chunk information to each result
+            for triplet in result.triplets:
+                valid_results.append(
+                    (chunk_tuple.current_chunk.document_id, chunk_tuple.current_chunk.order_id, triplet)
+                )
         
         # 6. Sort triplets by document and then chunk order
-        valid_results = sorted(
-            valid_results, 
-            key=lambda x: (x["chunk"].document_id, x["chunk"].order_id)
-        )
+        valid_results = [triplet for _, _, triplet in sorted(valid_results)]
         
         return valid_results
     
