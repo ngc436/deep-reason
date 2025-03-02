@@ -328,6 +328,26 @@ def build_kg_refining_chain(llm: BaseChatModel) -> Runnable['AggregationInput', 
     )
 
 
+def build_kg_refining_map_chain(llm: BaseChatModel) -> Runnable['AggregationInput', Dict[str, Any]]:
+    chain = build_kg_refining_chain(llm=llm)
+
+    def _process_output(x: Dict[str, Any]) -> Dict[str, Any]:
+        return {"current_graph": x["current_graph"]}
+    
+    return(chain | RunnableLambda(_process_output))
+
+
+async def reduce_partial_kg(partial_kgs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    kg_nodes = []
+    kg_triplets = []
+    for partial_kg in partial_kgs:
+        partial_kg_structure = cast(KgStructure, partial_kg['current_graph']) 
+        kg_nodes.extend(partial_kg_structure.kg_nodes)
+        kg_triplets.extend(partial_kg_structure.kg_triplets)
+    
+    return {"current_graph": KgStructure(kg_nodes=kg_nodes, kg_triplets=kg_triplets)}
+
+
 # Raw triplets
 class Triplet(BaseModel):
     triplet_id: str = Field(description="Unique identifier for the triplet")
@@ -376,6 +396,7 @@ class KgTriplet(BaseModel):
 
 
 class KgStructure(BaseModel):
+    kg_nodes: List[KgNode] = Field(description="List of knowledge graph nodes")
     kg_triplets: List[KgTriplet] = Field(description="List of knowledge graph triplets combined from raw initial triplets")
 
 
@@ -685,9 +706,8 @@ class KGConstructionAgent:
             )
         else:
             chain = MapReducer(
-                # TODO:redefine this two functions
-                map_chain=build_kg_refining_chain(self.llm),
-                reduce_chain=build_kg_refining_chain(self.llm),
+                map_chain=build_kg_refining_map_chain(self.llm),
+                reduce_chain=reduce_partial_kg,
                 tokenizer=self.tokenizer,
                 context_window_length=self.context_window_length
             )
