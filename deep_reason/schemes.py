@@ -29,12 +29,29 @@ class Quadriplet(BaseModel):
 class ChunkTripletsResult(BaseModel):
     triplets: list[Triplet] = Field(description="List of triplets")
 
-
 class Chunk(BaseModel):
     text: str | None = Field(description="Text of the chunk")
     chapter_name: str | None = Field(description="Name of the chapter")
     document_id: int = Field(description="Id of the document")
     order_id: int = Field(description="Order id of the chunk in the document")
+
+class OntologyRelation(BaseModel):
+    relation_id: int = Field(description="Id of the relation")
+    relation_name: str = Field(description="Name of the relation")
+    relation_instances: List[str] = Field(description="List of relation instances from triplets")
+
+class OntologyNodeConnection(BaseModel):
+    node_id: str = Field(description="Id of the ontology node")
+    relation_id: int = Field(description="Id of the relation")
+
+class OntologyNode(BaseModel):
+    node_id: str = Field(description="Id of the ontology node")
+    entity: str = Field(description="Entity name")
+    connections: List[OntologyNodeConnection] = Field(description="List of ontology node id that are connected to this node")
+    subjects: List[str] = Field(description="List of triplet subjects and objects that are instances of this node")
+
+class OntologyStructure(BaseModel):
+    ontology: Dict[str, List[OntologyNode]] = Field(description="Categories of entities and relationships")
 
 def _take_any(a: Optional[Any], b: Optional[Any]) -> Optional[Any]:
     return a or b

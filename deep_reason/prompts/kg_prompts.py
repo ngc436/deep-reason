@@ -4,10 +4,9 @@ UNKNOWN_TERMS_PROMPT = """
 If you see unknown terms, try to find the meaning of them in the context.
 """
 
-# TODO: rewrite prompt and add schema
+# TODO: rewrite prompt 
 KG_PROMPT_VAR1 = """
 # Instruction for Creating Nodes and Triplets on a text fragment: 
-Nodes should depict entities or concepts, similar to Wikipedia nodes. 
 Use a structured triplet format to capture data, as follows: "subject, relation, object". 
 For example, from "Albert Einstein, born in Germany, is known for developing the theory of relativity," extract "Albert Einstein, country of birth, Germany; Albert Einstein, developed, Theory of Relativity." 
 Remember that you should break complex triplets like "John, position, engineer in Google" into simple triplets like "John, position, engineer", "John, work at, Google". 
@@ -33,39 +32,15 @@ Remember that triplets must be extracted in format:
 """
 # Example of triplets you have extracted before: {example} Observation: {observation}
 
+ONTOLOGY_PROMPT = """
+You are a brilliant ontology agent for combining ontology from extracted triplets.
+Ontology nodes should depict entities or concepts, similar to Wikipedia high-level nodes. 
+Look carefully at the provided triplets and existing so far ontology and decide the following:
+1. If the provided triplet can be added to the existing ontology, add it to the ontology.
+2. If the provided triplet does not fit into the existing ontology, create a new ontology node for it.
 
-PLANNER_PROMPT = """
-You are a brilliant planner agent for the triplet extraction task.
-Look carefully at the provided chunk of text and decide the following.
-1. Do you understand the provided chunk? Are there some specific terms that you don't know?
-2. If you 
+Current ontology: {current_ontology}
 
-You have the following instruments: {tools_description}
-
-Decide which instruments and in which order you will use to correctly extract the triplets. 
-
-The first message should be a plan of your actions - which instruments you will use and in which order. Also provide an alternative plan in case the first one fails.
-You should not name 
-"""
-
-SYS_PROMPT = """ Ты виртуальный ассистент, который занимается перенаправлением запросов пользователей к соответствующим инструментам. \
-Компания для которой ты работаешь называется Татнефть и занимается нефтегазодобычей, нефтепереработкой, нефтегазохимией и другими связанными отраслями. \
-Первым сообщением пользователю сообщи план обработки его запроса, какие инструменты ты будешь использовать и в каком порядке. 
-Обязательно предложи запасной вариант - инструмент, которым ты воспользуешься, если первый не даст необходимый результат. \
-Тебе запрещено называть инструменты по имени функций, 
-но ты можешь давать их описание. 
-Например, вместо save_document, скажи функция сохранения документа.\
-Если необходимого инструмента нет в списке - попытайся ответить 
-на вопрос самостоятельно, при этом сообщив пользователю о том, 
-что у тебя нет соответствующего инструмента. \
-Есть инструменты, которые используют сообщения чата для работы, 
-поэтому тебе нужно писать в сообщениях только по одной теме и 
-только релевантную информацию. 
-Не пиши в обычных ответах пользователю приглашений к диалогу и 
-обоснований выбора. \
-Учти, что вызов отдельного инструмента должен быть 
-внутри своего тега <tool_call>, 
-если ты хочешь использовать 2 инструмента одновременно, 
-тебе придется написать 
-<tool_call>вызов_инструмента</tool_call><tool_call>вызов_второго_инструмента</tool_call>
+Your answer should be in the following format:
+{response_format_description}
 """
