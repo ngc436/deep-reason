@@ -256,22 +256,22 @@ class Refiner(Runnable[RefinerInput, Dict[str, Any]], ABC):
     @abstractmethod
     def _build_chain(self) -> Runnable[Dict[str, Any], R]:
         """Build the LLM chain used for refining"""
-        pass
-    
-    @abstractmethod
-    def _prepare_batch_input(self, batch: Optional[List[Triplet]], state: Dict[str, Any]) -> Dict[str, Any]:
-        """Prepare input for the chain based on current batch and state"""
         ...
     
-    def _create_batch(self, remaining_items: List[Triplet], current_state: Dict[str, Any]) -> Tuple[List[Triplet], List[Triplet]]:
+    def _estimate_size_in_tokens(self, state: Dict[str, Any] | BaseModel | str) -> str:
+        if isinstance(state, BaseModel):
+            text = state.model_dump_json()
+        elif isinstance(state, str):
+            text = state
+        else:
+            text = json.dumps(state)
+    
+        return len(self.tokenizer.encode(text))
+
+    def _create_batch(self, remaining_items: List[Triplet], current_state: Dict[str, Any] | BaseModel | str) -> Tuple[RefinerInput, List[Triplet]]:
         """Create a batch of items that fits within the context window"""
-        def estimate_item_size(item: T) -> int:
-            # Default implementation - should be overridden if needed
-            return len(str(item)) + 10  # Add buffer for JSON formatting
-            
         # Calculate current state size
-        state_size = len(json.dumps(current_state)) + 200  # Add buffer
-        
+        state_size = self._estimate_size_in_tokens(current_state)       
         # Dynamically form the next batch based on current state size
         current_batch = []
         current_batch_size = 0
@@ -283,7 +283,7 @@ class Refiner(Runnable[RefinerInput, Dict[str, Any]], ABC):
         # Add items to the batch until we reach the size limit
         while updated_remaining and current_batch_size < max_batch_size:
             item = updated_remaining[0]
-            item_size = estimate_item_size(item)
+            item_size = self._estimate_size_in_tokens(item)
             
             if current_batch_size + item_size <= max_batch_size:
                 current_batch.append(item)
@@ -295,19 +295,15 @@ class Refiner(Runnable[RefinerInput, Dict[str, Any]], ABC):
         
         # If we couldn't fit any items, take at least one (necessary for progress)
         if not current_batch and updated_remaining:
+            # TODO: raise an exception here
             current_batch.append(updated_remaining.pop(0))
             
-        return current_batch, updated_remaining
+        return RefinerInput(items=current_batch, input=current_state), updated_remaining
     
     async def ainvoke(self, refiner_input: RefinerInput, config: Optional[Dict[str, Any]] = None) -> R:
         """Process items in batches based on context window limitations"""
-        items = refiner_input.items
-        input_state = refiner_input.input
-        
-        # Initialize current state by preparing the initial input
-        current_state = self._prepare_batch_input(None, input_state)
-        
-        remaining_items = items.copy()
+        current_state = refiner_input.input
+        remaining_items = refiner_input.items.copy()
         batch_idx = 0
         batch_name = self.__class__.__name__
         
@@ -319,12 +315,9 @@ class Refiner(Runnable[RefinerInput, Dict[str, Any]], ABC):
                 batch_idx += 1
                 logger.info(f"Processing {batch_name} batch {batch_idx} with {len(current_batch)} items. Remaining: {len(remaining_items)}")
                 
-                # Prepare input for the chain
-                chain_input = self._prepare_batch_input(current_batch, current_state)
-                
                 # Process batch
                 with measure_time(f"processing {batch_name} batch {batch_idx}"):
-                    current_state = await self.chain.ainvoke(chain_input, config=config)
+                    current_state = await self.chain.ainvoke(current_batch, config=config)
                 
             except Exception as e:
                 # Handle exceptions
