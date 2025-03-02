@@ -284,8 +284,9 @@ class Refiner(Runnable[RefinerInput, Dict[str, Any]]):
         
         # If we couldn't fit any items, take at least one (necessary for progress)
         if not current_batch and updated_remaining:
-            # TODO: raise an exception here
-            current_batch.append(updated_remaining.pop(0))
+            raise KGConstructionAgentException(
+                "Cannot pack a single item into the batch due to too long context (most probably due to too long result generated on the previous iteration)"
+            )
             
         return RefinerInput(items=current_batch, input=current_state), updated_remaining
     
