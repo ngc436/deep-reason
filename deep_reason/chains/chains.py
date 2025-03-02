@@ -327,6 +327,11 @@ def build_kg_refining_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict
         | RunnableLambda(_process_output)
     )
 
+
+# class KGMapReduceChain(Runnable[, KgStructure]):
+#     pass
+
+
 # Raw triplets
 class Triplet(BaseModel):
     triplet_id: str = Field(description="Unique identifier for the triplet")
@@ -574,8 +579,9 @@ class KGConstructionAgent:
             context_window_length=self.context_window_length
         )
         refiner_input = RefinerInput(items=state.triplets, input={"current_ontology": None})
-        current_ontology = await refiner.ainvoke(input=refiner_input, config=config)
-        
+        result = await refiner.ainvoke(input=refiner_input, config=config)
+        current_ontology = result["current_ontology"]
+
         # Return updated state with the refined ontology
         return KGMiningWorkflowState(
             chunks=state.chunks,
@@ -606,7 +612,8 @@ class KGConstructionAgent:
                 "current_graph": None
             }
         )
-        current_kg = await refiner.ainvoke(input=refiner_input, config=config)
+        result = await refiner.ainvoke(input=refiner_input, config=config)
+        current_kg = result["current_graph"]
         
         # Return updated state with the refined knowledge graph
         return KGMiningWorkflowState(
