@@ -232,6 +232,11 @@ class KGConstructionAgentException(Exception):
 T = TypeVar('T')
 R = TypeVar('R')
 
+class RefinerInput(BaseModel):
+    items: List[Triplet] = Field(..., description="List of triplets to process")
+    input: Dict[str, Any] = Field(..., description="Additional input for the internal refine chain")
+
+
 class Refiner(Runnable[List[T], Dict[str, Any]], ABC):
     """Abstract class for refining data in batches with LLM chains"""
     
@@ -270,12 +275,11 @@ class Refiner(Runnable[List[T], Dict[str, Any]], ABC):
     
     async def ainvoke(self, items: List[T], config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Process items in batches based on context window limitations"""
-        # TODO: lets' make this impl more versatile
-        # 1. Replace items with a Generic type T that inherits from a pydantic class RefineInput.
-        # Thus T = TypeVar('T', bound='RefineInput') and R = TypeVar('R')
-        # 2. RefineInput has a field items of type List[Triplets]
+        # TODO: let's make this impl more versatile
+        # 1. ainvoke should receive input of type RefinerInput instead of items
+        # 2. Output of Refiner should be of type R
         # 3. Refiner should inherit from Runnable[T, R]
-        # 3. make _prepare_batch_input should be able to receive batch of triplets or None and T.
+        # 3. make _prepare_batch_input should be able to receive two argumets: batch of triplets or None and Dict[str, Any].
         # 4. _prepare_batch_input should be called BEFORE the main loop to produce the very first current_result for sending into _create_batch 
         # 5. Refactor other Refiner children to get rid of duplicate code. 
         # Basically, ainvoke, invoke, _create_batch methods should be only defined in the Refiner class,
