@@ -133,7 +133,7 @@ Current chunk: {current_chunk}
     return build_chain(llm, system_template, human_template, parser)
 
 
-def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable:
+def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict[str, Any]]:
     system_template = """You are an expert knowledge graph engineer. Your task is to construct and refine an ontology 
     based on knowledge triplets extracted from text. An ontology consists of entity types and relationship types.
 
@@ -144,7 +144,8 @@ def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable:
 
     human_template = """Process the following knowledge triplets to create or refine an ontology:
 
-    {triplets}
+    Triplets:
+    {triplet_list}
 
     Current Ontology:
     {current_ontology}
@@ -157,10 +158,28 @@ def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable:
     
     parser = PydanticOutputParser(pydantic_object=OntologyStructure)
     
-    return build_chain(llm, system_template, human_template, parser)
+    chain = build_chain(llm, system_template, human_template, parser)
+    
+    def _process_input(refiner_input: RefinerInput):
+        # Extract triplets from items list
+        formatted_triplets = "\n".join([
+            f"- Subject: {item.subject}, Predicate: {item.predicate}, Object: {item.object}"
+            for item in refiner_input.items
+        ])
+        
+        return {
+            "triplet_list": formatted_triplets,
+            "current_ontology": refiner_input.input.get("current_ontology", {})
+        }
+    
+    def _process_output(result: OntologyStructure) -> Dict[str, Any]:
+        # Extract the ontology dictionary to be used in the next iteration
+        return result.ontology
+    
+    return RunnableLambda(_process_input) | chain | RunnableLambda(_process_output)
 
 
-def build_kg_refining_chain(llm: BaseChatModel) -> Runnable:
+def build_kg_refining_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict[str, Any]]:
     system_template = """You are an expert knowledge graph engineer. Your task is to build a knowledge graph using the provided triplets and ontology.
 
     The knowledge graph consists of:
@@ -171,20 +190,45 @@ def build_kg_refining_chain(llm: BaseChatModel) -> Runnable:
 
     human_template = """Process the following knowledge triplets to build or refine a knowledge graph:
 
-    {triplets}
+    Triplets:
+    {triplet_list}
 
     Current Ontology (DO NOT MODIFY):
-    {current_ontology}
+    {ontology}
 
     Current Knowledge Graph:
-    {current_kg}
+    Entities: {entities}
+    Relationships: {relationships}
 
     Compile or refine the knowledge graph based on these triplets and the existing ontology.
     {response_format_description}"""
     
     parser = PydanticOutputParser(pydantic_object=KnowledgeGraph)
     
-    return build_chain(llm, system_template, human_template, parser)
+    chain = build_chain(llm, system_template, human_template, parser)
+    
+    def _process_input(refiner_input: RefinerInput):
+        # Extract triplets from items list
+        formatted_triplets = "\n".join([
+            f"- Subject: {item.subject}, Predicate: {item.predicate}, Object: {item.object}"
+            for item in refiner_input.items
+        ])
+        
+        return {
+            "triplet_list": formatted_triplets,
+            "ontology": refiner_input.input.get("ontology", {}),
+            "entities": refiner_input.input.get("entities", []),
+            "relationships": refiner_input.input.get("relationships", [])
+        }
+    
+    def _process_output(result: KnowledgeGraph) -> Dict[str, Any]:
+        # Return a dictionary with entities and relationships for the next iteration
+        return {
+            "entities": [entity.model_dump() for entity in result.entities],
+            "relationships": [relationship.model_dump() for relationship in result.relationships]
+        }
+    
+    return RunnableLambda(_process_input) | chain | RunnableLambda(_process_output)
 
 
 class Triplet(BaseModel):
