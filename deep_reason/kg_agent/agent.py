@@ -217,7 +217,7 @@ def main():
 
     chunks = load_obliqa_dataset(obliqa_dir="datasets/ObliQA/StructuredRegulatoryDocuments")
 
-    asyncio.run(run_kg_mining(llm, chunks))
+    asyncio.run(run_kg_mining(llm, chunks[:10]))
 
 if __name__ == "__main__":
     logging.basicConfig(
