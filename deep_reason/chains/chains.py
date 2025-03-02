@@ -38,13 +38,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class KGMiningWorkflowState(BaseModel):
-    chunks: List[Chunk]
-    triplets: List[Dict[str, Any]] = Field(default_factory=list)
-    ontology: Dict[str, List[str]] = Field(default_factory=dict)
-    knowledge_graph: List[Dict[str, Any]] = Field(default_factory=list)
-
-
 @contextmanager
 def measure_time(name: Optional[str] = None):
     start_time = datetime.now()
@@ -133,14 +126,6 @@ Current chunk: {current_chunk}
 {right_context_prefix}{right_context}
 
 {response_format_description}"""
-
-    class Triplet(BaseModel):
-        subject: str = Field(description="The entity performing the action or having the property")
-        predicate: str = Field(description="The relationship or action")
-        object: str = Field(description="The entity receiving the action or the value of the property")
-    
-    class TripletList(BaseModel):
-        triplets: List[Triplet] = Field(description="List of knowledge triplets extracted from the text")
     
     parser = PydanticOutputParser(pydantic_object=TripletList)
     
@@ -195,27 +180,47 @@ def build_kg_refining_chain(llm: BaseChatModel) -> Runnable:
 
     Compile or refine the knowledge graph based on these triplets and the existing ontology.
     {response_format_description}"""
-
-    class Entity(BaseModel):
-        id: str = Field(description="Unique identifier for the entity")
-        name: str = Field(description="Entity name or label")
-        type: str = Field(description="Entity type from the ontology")
-        properties: Dict[str, str] = Field(description="Additional properties for the entity", default_factory=dict)
-
-    class Relationship(BaseModel):
-        id: str = Field(description="Unique identifier for the relationship")
-        source: str = Field(description="Source entity ID")
-        target: str = Field(description="Target entity ID")
-        type: str = Field(description="Relationship type from the ontology")
-        properties: Dict[str, str] = Field(description="Additional properties for the relationship", default_factory=dict)
-
-    class KnowledgeGraph(BaseModel):
-        entities: List[Entity] = Field(description="Entities in the knowledge graph")
-        relationships: List[Relationship] = Field(description="Relationships between entities")
     
     parser = PydanticOutputParser(pydantic_object=KnowledgeGraph)
     
     return build_chain(llm, system_template, human_template, parser)
+
+
+class Triplet(BaseModel):
+    subject: str = Field(description="The entity performing the action or having the property")
+    predicate: str = Field(description="The relationship or action")
+    object: str = Field(description="The entity receiving the action or the value of the property")
+
+
+class TripletList(BaseModel):
+    triplets: List[Triplet] = Field(description="List of knowledge triplets extracted from the text")
+
+
+class Entity(BaseModel):
+    id: str = Field(description="Unique identifier for the entity")
+    name: str = Field(description="Entity name or label")
+    type: str = Field(description="Entity type from the ontology")
+    properties: Dict[str, str] = Field(description="Additional properties for the entity", default_factory=dict)
+
+
+class Relationship(BaseModel):
+    id: str = Field(description="Unique identifier for the relationship")
+    source: str = Field(description="Source entity ID")
+    target: str = Field(description="Target entity ID")
+    type: str = Field(description="Relationship type from the ontology")
+    properties: Dict[str, str] = Field(description="Additional properties for the relationship", default_factory=dict)
+
+
+class KnowledgeGraph(BaseModel):
+    entities: List[Entity] = Field(description="Entities in the knowledge graph")
+    relationships: List[Relationship] = Field(description="Relationships between entities")
+
+
+class KGMiningWorkflowState(BaseModel):
+    chunks: List[Chunk]
+    triplets: List[Dict[str, Any]] = Field(default_factory=list)
+    ontology: Dict[str, List[str]] = Field(default_factory=dict)
+    knowledge_graph: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class KGConstructionAgentException(Exception):
@@ -301,23 +306,26 @@ class KGConstructionAgent:
             knowledge_graph=state.knowledge_graph
         )
     
-    async def _refine_in_batches(self, chain, items, current_result, batch_type="ontology"):
+    async def _refine_in_batches(self, chain, items: List[Triplet], batch_type="ontology"):
+        # TODO: make this function in a separate class inherited from Runnable and called Refiner
+        # 0. Refiner should be abstract class inherited from Runnable and ABC.It should has abstract method '_prepare_batch_input'
+        # 1. the logic of batching should be the same as it is now
+        # 2. Everything from '# Format items and current result for the chain' to '# Process items iteratively, updating the result with each batch' 
+        # should be moved into a separate method '_prepare_batch_input'. This method also should receive current_result. 
+        # The method will produce inputs for the chain and the class will give an opportunity to redefine this method in a child class.
+        # 3. Current consumers should have their own child classes implementing '_prepare_batch_input', appropriate for their chains
+        # 4. Building of the respective chains may be moved into this class as well as class-level methods        
         """Process items in batches based on context window limitations.
         
         Args:
             chain: The LangChain chain to process each batch
             items: List of items to process
-            current_result: Initial result structure to update incrementally
             batch_type: Type of batch processing ("ontology" or "knowledge graph")
         
         Returns:
             The final updated result after processing all batches
         """
         # Define helper functions for batch processing
-        def estimate_triplet_size(triplet):
-            t = triplet["triplet"]
-            return len(t.subject) + len(t.predicate) + len(t.object) + 10  # +10 for JSON structure overhead
-        
         def format_triplets(triplets):
             return "\n".join([
                 f"- Subject: {t['triplet'].subject}, Predicate: {t['triplet'].predicate}, Object: {t['triplet'].object}"
@@ -341,6 +349,7 @@ class KGConstructionAgent:
                 }
         
         # Track the remaining items to process
+        current_result = dict()
         remaining_items = items.copy()
         batch_idx = 0
         batch_name = "knowledge graph" if batch_type == "knowledge graph" else "ontology batch"
@@ -348,30 +357,8 @@ class KGConstructionAgent:
         # Process items iteratively, updating the result with each batch
         while remaining_items:
             try:
-                # Calculate current result size
-                result_size = len(json.dumps(current_result)) + 200  # Add buffer
-                
-                # Dynamically form the next batch based on current result size
-                current_batch = []
-                current_batch_size = 0
-                max_batch_size = (self.context_window_length - result_size) // 2
-                
-                # Add items to the batch until we reach the size limit
-                while remaining_items and current_batch_size < max_batch_size:
-                    item = remaining_items[0]
-                    item_size = estimate_triplet_size(item)
-                    
-                    if current_batch_size + item_size <= max_batch_size:
-                        current_batch.append(item)
-                        current_batch_size += item_size
-                        remaining_items.pop(0)
-                    else:
-                        # This item would exceed the batch size limit
-                        break
-                
-                # If we couldn't fit any items, take at least one (necessary for progress)
-                if not current_batch and remaining_items:
-                    current_batch.append(remaining_items.pop(0))
+                # Create the next batch based on context window limitations
+                current_batch, remaining_items = self._create_batch(remaining_items, current_result)
                 
                 batch_idx += 1
                 logger.info(f"Processing {batch_name} {batch_idx} with {len(current_batch)} items. Remaining: {len(remaining_items)}")
@@ -404,6 +391,51 @@ class KGConstructionAgent:
                 raise KGConstructionAgentException(error_msg)
         
         return current_result
+    
+    def _create_batch(self, remaining_items, current_result):
+        """Create a batch of items that fits within the context window.
+        
+        Args:
+            remaining_items: List of items still to be processed
+            current_result: Current accumulated result
+            estimate_size_func: Function to estimate size of an item
+            
+        Returns:
+            Tuple of (current_batch, updated_remaining_items)
+        """
+        def estimate_triplet_size(triplet):
+            t = triplet["triplet"]
+            return len(t.subject) + len(t.predicate) + len(t.object) + 10  # +10 for JSON structure overhead
+
+        # Calculate current result size
+        result_size = len(json.dumps(current_result)) + 200  # Add buffer
+        
+        # Dynamically form the next batch based on current result size
+        current_batch = []
+        current_batch_size = 0
+        max_batch_size = (self.context_window_length - result_size) // 2
+        
+        # Make a copy of remaining items to avoid modifying the original during batch creation
+        updated_remaining = remaining_items.copy()
+        
+        # Add items to the batch until we reach the size limit
+        while updated_remaining and current_batch_size < max_batch_size:
+            item = updated_remaining[0]
+            item_size = estimate_triplet_size(item)
+            
+            if current_batch_size + item_size <= max_batch_size:
+                current_batch.append(item)
+                current_batch_size += item_size
+                updated_remaining.pop(0)
+            else:
+                # This item would exceed the batch size limit
+                break
+        
+        # If we couldn't fit any items, take at least one (necessary for progress)
+        if not current_batch and updated_remaining:
+            current_batch.append(updated_remaining.pop(0))
+            
+        return current_batch, updated_remaining
 
     async def ontology_refining(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
         # 0. Check for empty triplets
@@ -418,7 +450,6 @@ class KGConstructionAgent:
         current_ontology = await self._refine_in_batches(
             chain=chain,
             items=state.triplets,
-            current_result={},
             batch_type="ontology"
         )
         
@@ -448,7 +479,6 @@ class KGConstructionAgent:
         current_kg = await self._refine_in_batches(
             chain=chain,
             items=state.triplets,
-            current_result={"entities": [], "relationships": []},
             batch_type="knowledge graph"
         )
         
@@ -480,6 +510,7 @@ async def run_kg_mining(llm: BaseChatModel, chunks: List[Chunk]) -> KGMiningWork
     state = KGMiningWorkflowState(chunks=chunks)
     result = await agent.build_wf().ainvoke(state)
     result = KGMiningWorkflowState.model_validate(result)
+    # TODO: save ontology and knowledge graph to file on disk
     return result
 
 
