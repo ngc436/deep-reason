@@ -128,7 +128,13 @@ class KGConstructionAgent:
         return wf.compile()
 
 
-async def run_kg_mining(llm: BaseChatModel, chunks: List[Chunk], output_path: str = "kg_output") -> KGMiningWorkflowState:
+async def run_kg_mining(llm: BaseChatModel, chunks: List[Chunk], output_path: str = "kg_output"):
+    # TODO: for debuggin purposes
+    miner = TripletsMiner(llm)
+    valid_results = await miner.ainvoke(chunks[:10])
+    print(valid_results)
+    return
+
     agent = KGConstructionAgent(llm)
     state = KGMiningWorkflowState(chunks=chunks)
     result = await agent.build_wf().ainvoke(state)
@@ -149,8 +155,6 @@ async def run_kg_mining(llm: BaseChatModel, chunks: List[Chunk], output_path: st
     with open(result_path, "w") as f:
         f.write(kg_mining_result.model_dump_json(indent=2))
     logger.info(f"Saved KG mining result to {result_path}")
-    
-    return result
 
 
 def main():
@@ -163,9 +167,6 @@ def main():
     )
 
     chunks = load_obliqa_dataset(obliqa_dir="datasets/ObliQA/StructuredRegulatoryDocuments")
-
-    # For debugging purposes
-    chunks = chunks[:10]
 
     asyncio.run(run_kg_mining(llm, chunks))
 
