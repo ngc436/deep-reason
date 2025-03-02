@@ -129,60 +129,56 @@ class KGConstructionAgent:
 
 
 async def run_kg_mining(llm: BaseChatModel, chunks: List[Chunk], output_path: str = "kg_output"):
-    # TODO: for debuggin purposes
-    import pickle
-    valide_results_path = "/tmp/valid_results.pickle"
-    if not os.path.exists(valide_results_path):
-        miner = TripletsMiner(llm)
-        valid_results = await miner.ainvoke(chunks[:10])
-        with open(valide_results_path, "wb") as f:
-            pickle.dump(valid_results, f)
-    else:
-        with open(valide_results_path, "rb") as f:
-            valid_results = pickle.load(f)
+    # alternative for debuggin purposes
+    # import pickle
+    # valide_results_path = "/tmp/valid_results.pickle"
+    # if not os.path.exists(valide_results_path):
+    #     miner = TripletsMiner(llm)
+    #     valid_results = await miner.ainvoke(chunks[:10])
+    #     with open(valide_results_path, "wb") as f:
+    #         pickle.dump(valid_results, f)
+    # else:
+    #     with open(valide_results_path, "rb") as f:
+    #         valid_results = pickle.load(f)
 
-    ontology_path = "/tmp/ontology.pickle"
-    if not os.path.exists(ontology_path):
-        refiner = Refiner(
-            refine_chain=build_ontology_refinement_chain(llm), 
-            tokenizer=None, 
-            context_window_length=25_000
-        )
-        refiner_input = AggregationInput(items=valid_results, input={"current_ontology": None})
-        result = await refiner.ainvoke(input=refiner_input, config=None)
-        current_ontology = result["current_ontology"]
-        with open(ontology_path, "wb") as f:
-            pickle.dump(current_ontology, f)
-    else:
-        with open(ontology_path, "rb") as f:
-            current_ontology = pickle.load(f)
+    # ontology_path = "/tmp/ontology.pickle"
+    # if not os.path.exists(ontology_path):
+    #     refiner = Refiner(
+    #         refine_chain=build_ontology_refinement_chain(llm), 
+    #         tokenizer=None, 
+    #         context_window_length=25_000
+    #     )
+    #     refiner_input = AggregationInput(items=valid_results, input={"current_ontology": None})
+    #     result = await refiner.ainvoke(input=refiner_input, config=None)
+    #     current_ontology = result["current_ontology"]
+    #     with open(ontology_path, "wb") as f:
+    #         pickle.dump(current_ontology, f)
+    # else:
+    #     with open(ontology_path, "rb") as f:
+    #         current_ontology = pickle.load(f)
 
-    k = 0
-
-    kg_path = "/tmp/kg.pickle"
-    if os.path.exists(kg_path):
-        chain = MapReducer(
-            map_chain=build_kg_refining_map_chain(llm),
-            reduce_chain=reduce_partial_kg,
-            tokenizer=None,
-            context_window_length=25_000
-        )
-        agg_input = AggregationInput(
-            items=valid_results,
-            input={
-                "ontology": current_ontology,
-                "current_graph": None
-            }
-        )
-        result = await chain.ainvoke(input=agg_input, config=None)
-        current_kg = result["current_graph"]
-        with open(kg_path, "wb") as f:  
-            pickle.dump(current_kg, f)
-    else:
-        with open(kg_path, "rb") as f:
-            current_kg = pickle.load(f)
-    
-    return
+    # kg_path = "/tmp/kg.pickle"
+    # if not os.path.exists(kg_path):
+    #     chain = MapReducer(
+    #         map_chain=build_kg_refining_map_chain(llm),
+    #         reduce_chain=reduce_partial_kg,
+    #         tokenizer=None,
+    #         context_window_length=25_000
+    #     )
+    #     agg_input = AggregationInput(
+    #         items=valid_results,
+    #         input={
+    #             "ontology": current_ontology,
+    #             "current_graph": None
+    #         }
+    #     )
+    #     result = await chain.ainvoke(input=agg_input, config=None)
+    #     current_kg = result["current_graph"]
+    #     with open(kg_path, "wb") as f:  
+    #         pickle.dump(current_kg, f)
+    # else:
+    #     with open(kg_path, "rb") as f:
+    #         current_kg = pickle.load(f)
 
     agent = KGConstructionAgent(llm)
     state = KGMiningWorkflowState(chunks=chunks)

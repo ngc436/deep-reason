@@ -215,7 +215,7 @@ def build_kg_refining_chain(llm: BaseChatModel) -> Runnable['AggregationInput', 
         current_graph = refiner_input.input.get("current_graph", None)
         if not current_graph:
             logger.info("No current graph provided, creating empty graph")
-            current_graph = KgStructure(kg_triplets=[])
+            current_graph = KgStructure(kg_nodes=[], kg_triplets=[])
 
         # Extract triplets from items list
         formatted_triplets = "\n".join([

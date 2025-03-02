@@ -6,6 +6,7 @@ import pandas as pd
 import os
 from typing import Any, Dict, List, Optional, Tuple
 from abc import ABC
+from pydantic import BaseModel
 import tiktoken
 from transformers import PreTrainedTokenizerBase
 
@@ -47,12 +48,12 @@ class AggregationHelper(ABC):
     context_window_length: int
 
     def _estimate_size_in_tokens(self, state: Dict[str, Any] | Any | str) -> str:
-        if hasattr(state, "model_dump_json"):
+        if isinstance(state, BaseModel):
             text = state.model_dump_json()
         elif isinstance(state, str):
             text = state
         else:
-            text = json.dumps(state)
+            text = f"{state}"
     
         return len(self.tokenizer.encode(text))
 
