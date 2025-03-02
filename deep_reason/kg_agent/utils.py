@@ -4,11 +4,13 @@ import json
 import logging
 import pandas as pd
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar
 from abc import ABC
 from pydantic import BaseModel
 import tiktoken
 from transformers import PreTrainedTokenizerBase
+from pathlib import Path
+import hashlib
 
 from deep_reason.schemes import Chunk
 from deep_reason.kg_agent.schemes import Triplet, AggregationInput
@@ -90,4 +92,95 @@ class AggregationHelper(ABC):
             )
             
         return AggregationInput(items=current_batch, input=current_state), updated_remaining
+
+T = TypeVar("T", bound=BaseModel)
+
+class CacheManager:
+    """
+    A cache manager for storing and retrieving Pydantic models as JSON files on disk.
+    Uses hashing to identify and retrieve cached results.
+    """
+    
+    def __init__(self, cache_dir: str = ".cache"):
+        """
+        Initialize the cache manager.
+        
+        Args:
+            cache_dir: Directory to store cache files
+        """
+        self.cache_dir = Path(cache_dir)
+        os.makedirs(self.cache_dir, exist_ok=True)
+    
+    def _hash_input(self, input_data: Any) -> str:
+        """Create a hash from input data."""
+        if isinstance(input_data, BaseModel):
+            input_str = input_data.model_dump_json(exclude_none=True)
+        elif isinstance(input_data, list) and all(isinstance(item, BaseModel) for item in input_data):
+            input_str = json.dumps([item.model_dump(exclude_none=True) for item in input_data])
+        elif isinstance(input_data, dict):
+            input_str = json.dumps(input_data, sort_keys=True)
+        elif isinstance(input_data, (str, bytes)):
+            input_str = str(input_data)
+        else:
+            input_str = str(input_data)
+        
+        return hashlib.md5(input_str.encode()).hexdigest()
+    
+    def _get_cache_path(self, cache_key: str, prefix: str = "") -> Path:
+        """Get the file path for a cache key with optional prefix directory."""
+        if prefix:
+            prefix_dir = self.cache_dir / prefix
+            os.makedirs(prefix_dir, exist_ok=True)
+            return prefix_dir / f"{cache_key}.json"
+        return self.cache_dir / f"{cache_key}.json"
+    
+    def get(self, input_data: Any, model_class: Type[T], prefix: str = "") -> Optional[T]:
+        """
+        Retrieve cached data if it exists.
+        
+        Args:
+            input_data: The input data that was used to generate the cached result
+            model_class: The Pydantic model class for deserializing the result
+            prefix: Optional subdirectory to organize cache files
+            
+        Returns:
+            The cached model instance or None if not found
+        """
+        cache_key = self._hash_input(input_data)
+        cache_path = self._get_cache_path(cache_key, prefix)
+        
+        if cache_path.exists():
+            try:
+                logger.info(f"Cache hit for key {cache_key} in {prefix}")
+                with open(cache_path, 'r') as f:
+                    cached_data = json.load(f)
+                return model_class.model_validate(cached_data)
+            except Exception as e:
+                logger.error(f"Error reading cache file {cache_path}: {e}")
+                return None
+        
+        logger.info(f"Cache miss for key {cache_key} in {prefix}")
+        return None
+    
+    def put(self, input_data: Any, result: T, prefix: str = "") -> None:
+        """
+        Store data in the cache.
+        
+        Args:
+            input_data: The input data used to generate the result
+            result: The Pydantic model instance to cache
+            prefix: Optional subdirectory to organize cache files
+        """
+        if not isinstance(result, BaseModel):
+            raise ValueError("Only Pydantic models can be cached")
+            
+        cache_key = self._hash_input(input_data)
+        cache_path = self._get_cache_path(cache_key, prefix)
+        
+        try:
+            with open(cache_path, 'w') as f:
+                f.write(result.model_dump_json(exclude_none=True))
+            logger.info(f"Cached result for key {cache_key} in {prefix}")
+        except Exception as e:
+            logger.error(f"Error writing to cache file {cache_path}: {e}")
 

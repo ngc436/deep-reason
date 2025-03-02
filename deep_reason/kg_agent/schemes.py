@@ -65,6 +65,7 @@ class KgStructure(BaseModel):
 
 
 class KGMiningWorkflowState(BaseModel):
+    no_cache: bool = Field(default=False, description="If true, the workflow will not use cached results")  
     chunks: List[Chunk]
     triplets: Optional[List[Triplet]] = None
     ontology: Optional[OntologyStructure] = None
