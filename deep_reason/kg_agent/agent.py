@@ -2,7 +2,6 @@ import logging
 import os
 import asyncio
 from typing import Any, Dict, List, Optional
-from itertools import groupby
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.runnables import Runnable
@@ -13,19 +12,15 @@ from deep_reason.envs import OPENAI_API_BASE, OPENAI_API_KEY
 from deep_reason.schemes import Chunk
 from deep_reason.utils import VLLMChatOpenAI
 from deep_reason.kg_agent.schemes import (
-    AggregationInput, KGMiningWorkflowState, ChunkTuple, KGMiningResult
+    AggregationInput, KGMiningWorkflowState, KGMiningResult
 )
 from deep_reason.kg_agent.utils import KGConstructionAgentException, load_obliqa_dataset
 from deep_reason.kg_agent.chains import (
-    MapReducer, Refiner, build_triplets_mining_chain, build_ontology_refinement_chain, 
-    build_kg_refining_chain, build_kg_refining_map_chain, reduce_partial_kg
+    MapReducer, Refiner, build_ontology_refinement_chain, 
+    build_kg_refining_chain, build_kg_refining_map_chain, reduce_partial_kg, TripletsMiner
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)", 
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,64 +35,12 @@ class KGConstructionAgent:
         self.tokenizer = tokenizer
         self.use_refine_for_kg = use_refine_for_kg
 
-    async def triplets_mining(self, state: KGMiningWorkflowState, config: Optional[Dict[str, Any]] = None) -> KGMiningWorkflowState:
-        # 1. Order chunks by document_id and order_id
-        chunks = sorted(state.chunks, key=lambda x: (x.document_id, x.order_id))
+    async def _triplets_mining(self, state: KGMiningWorkflowState, config: Optional[Dict[str, Any]] = None) -> KGMiningWorkflowState:
+        # Use the TripletsMiner class to extract triplets from chunks
+        miner = TripletsMiner(self.llm)
+        valid_results = await miner.ainvoke(state.chunks, config=config)
         
-        # 2. Create chunk tuples with sliding window approach
-        chunk_tuples = []
-        
-        # Group chunks by document_id
-        for doc_id, doc_chunks in groupby(chunks, key=lambda x: x.document_id):
-            doc_chunks_list = list(doc_chunks)
-            
-            for i, chunk in enumerate(doc_chunks_list):
-                left_context = None if i == 0 else doc_chunks_list[i-1]
-                right_context = None if i == len(doc_chunks_list) - 1 else doc_chunks_list[i+1]
-                
-                chunk_tuples.append(ChunkTuple(
-                    current_chunk=chunk,
-                    left_context=left_context,
-                    right_context=right_context
-                ))
-        
-        # 3. Build the triplet mining chain
-        chain = build_triplets_mining_chain(self.llm)
-        
-        # 4. Process chunk tuples using batch method
-        inputs = []
-        for ct in chunk_tuples:
-            input_dict = {
-                "current_chunk": ct.current_chunk.text,
-                "left_context_prefix": "Left context: " if ct.left_context else "No left context available.",
-                "left_context": ct.left_context.text if ct.left_context else "",
-                "right_context_prefix": "Right context: " if ct.right_context else "No right context available.",
-                "right_context": ct.right_context.text if ct.right_context else ""
-            }
-            inputs.append(input_dict)
-        
-        results = await chain.abatch(inputs, return_exceptions=True, config=config)
-        
-        # 5. Handle exceptions
-        valid_results = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(f"Error processing chunk {chunk_tuples[i].current_chunk.chapter_name}: {result}")
-            else:
-                # Attach the chunk information to each result
-                for triplet in result.triplets:
-                    valid_results.append({
-                        "chunk": chunk_tuples[i].current_chunk,
-                        "triplet": triplet
-                    })
-        
-        # 6. Sort triplets by document and then chunk order
-        valid_results = sorted(
-            valid_results, 
-            key=lambda x: (x["chunk"].document_id, x["chunk"].order_id)
-        )
-
-        # 7. Create and return new state with valid results
+        # Create and return new state with valid results
         return KGMiningWorkflowState(
             chunks=state.chunks,
             triplets=valid_results,
@@ -105,7 +48,7 @@ class KGConstructionAgent:
             knowledge_graph=state.knowledge_graph
         )
     
-    async def ontology_refining(self, state: KGMiningWorkflowState, config: Optional[Dict[str, Any]] = None) -> KGMiningWorkflowState:
+    async def _ontology_refining(self, state: KGMiningWorkflowState, config: Optional[Dict[str, Any]] = None) -> KGMiningWorkflowState:
         # Check for empty triplets
         if not state.triplets:
             logger.error("No triplets found in state, cannot construct ontology")
@@ -128,7 +71,7 @@ class KGConstructionAgent:
             knowledge_graph=state.knowledge_graph
         )
 
-    async def kg_refining(self, state: KGMiningWorkflowState, config: Optional[Dict[str, Any]] = None) -> KGMiningWorkflowState:
+    async def _kg_refining(self, state: KGMiningWorkflowState, config: Optional[Dict[str, Any]] = None) -> KGMiningWorkflowState:
         # Check for empty triplets or ontology
         if not state.triplets:
             logger.error("No triplets found in state, cannot build knowledge graph")
@@ -173,9 +116,9 @@ class KGConstructionAgent:
     def build_wf(self) -> Runnable[KGMiningWorkflowState, Dict[str, Any]]:
         wf = StateGraph(KGMiningWorkflowState)
         
-        wf.add_node("triplets_mining", self.triplets_mining)
-        wf.add_node("ontology_refining", self.ontology_refining)
-        wf.add_node("kg_refining", self.kg_refining)
+        wf.add_node("triplets_mining", self._triplets_mining)
+        wf.add_node("ontology_refining", self._ontology_refining)
+        wf.add_node("kg_refining", self._kg_refining)
 
         wf.add_edge(START, "triplets_mining")
         wf.add_edge("triplets_mining", "ontology_refining")
@@ -227,4 +170,10 @@ def main():
     asyncio.run(run_kg_mining(llm, chunks))
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)", 
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
     main()
+

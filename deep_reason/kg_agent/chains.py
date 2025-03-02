@@ -1,4 +1,5 @@
 import asyncio
+from itertools import groupby
 import logging
 from typing import Any, Callable, Dict, List, Optional, cast
 
@@ -12,9 +13,10 @@ import tiktoken
 from transformers import AutoTokenizer
 
 from deep_reason.kg_agent.schemes import (
-    TripletList, OntologyStructure, KgStructure, AggregationInput
+    ChunkTuple, TripletList, OntologyStructure, KgStructure, AggregationInput
 )
 from deep_reason.kg_agent.utils import AggregationHelper, logger, measure_time
+from deep_reason.schemes import Chunk
 
 
 logger = logging.getLogger(__name__)
@@ -394,4 +396,83 @@ class MapReducer(AggregationHelper, Runnable[AggregationInput, Dict[str, Any]]):
     def invoke(self, input_data: AggregationInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Synchronous version that runs the async method in an event loop."""
         return asyncio.run(self.ainvoke(input_data, config))
+
+
+class TripletsMiner(Runnable):
+    """Process chunks to extract knowledge triplets using sliding window context approach."""
+    
+    def __init__(self, llm: BaseChatModel):
+        self.llm = llm
+    
+    async def ainvoke(self, chunks: List[Chunk], config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Process chunks to extract triplets with surrounding context.
+        
+        Args:
+            chunks: List of chunks to process
+            config: Optional configuration for the chain
+            
+        Returns:
+            List of dictionaries containing chunk and triplet information
+        """
+        # 1. Order chunks by document_id and order_id
+        chunks = sorted(chunks, key=lambda x: (x.document_id, x.order_id))
+        
+        # 2. Create chunk tuples with sliding window approach
+        chunk_tuples = []
+        
+        # Group chunks by document_id
+        for doc_id, doc_chunks in groupby(chunks, key=lambda x: x.document_id):
+            doc_chunks_list = list(doc_chunks)
+            
+            for i, chunk in enumerate(doc_chunks_list):
+                left_context = None if i == 0 else doc_chunks_list[i-1]
+                right_context = None if i == len(doc_chunks_list) - 1 else doc_chunks_list[i+1]
+                
+                chunk_tuples.append(ChunkTuple(
+                    current_chunk=chunk,
+                    left_context=left_context,
+                    right_context=right_context
+                ))
+        
+        # 3. Build the triplet mining chain
+        chain = build_triplets_mining_chain(self.llm)
+        
+        # 4. Process chunk tuples using batch method
+        inputs = []
+        for ct in chunk_tuples:
+            input_dict = {
+                "current_chunk": ct.current_chunk.text,
+                "left_context_prefix": "Left context: " if ct.left_context else "No left context available.",
+                "left_context": ct.left_context.text if ct.left_context else "",
+                "right_context_prefix": "Right context: " if ct.right_context else "No right context available.",
+                "right_context": ct.right_context.text if ct.right_context else ""
+            }
+            inputs.append(input_dict)
+        
+        results = await chain.abatch(inputs, return_exceptions=True, config=config)
+        
+        # 5. Handle exceptions
+        valid_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Error processing chunk {chunk_tuples[i].current_chunk.chapter_name}: {result}")
+            else:
+                # Attach the chunk information to each result
+                for triplet in result.triplets:
+                    valid_results.append({
+                        "chunk": chunk_tuples[i].current_chunk,
+                        "triplet": triplet
+                    })
+        
+        # 6. Sort triplets by document and then chunk order
+        valid_results = sorted(
+            valid_results, 
+            key=lambda x: (x["chunk"].document_id, x["chunk"].order_id)
+        )
+        
+        return valid_results
+    
+    def invoke(self, chunks: List[Chunk], config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Synchronous version that runs the async method in an event loop."""
+        return asyncio.run(self.ainvoke(chunks, config))
 
