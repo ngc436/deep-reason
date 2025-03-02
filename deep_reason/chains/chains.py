@@ -270,6 +270,18 @@ class Refiner(Runnable[List[T], Dict[str, Any]], ABC):
     
     async def ainvoke(self, items: List[T], config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Process items in batches based on context window limitations"""
+        # TODO: lets' make this impl more versatile
+        # 1. Replace items with a Generic type T that inherits from a pydantic class RefineInput.
+        # Thus T = TypeVar('T', bound='RefineInput') and R = TypeVar('R')
+        # 2. RefineInput has a field items of type List[Triplets]
+        # 3. Refiner should inherit from Runnable[T, R]
+        # 3. make _prepare_batch_input should be able to receive batch of triplets or None and T.
+        # 4. _prepare_batch_input should be called BEFORE the main loop to produce the very first current_result for sending into _create_batch 
+        # 5. Refactor other Refiner children to get rid of duplicate code. 
+        # Basically, ainvoke, invoke, _create_batch methods should be only defined in the Refiner class,
+        # children classes should only implement _build_chain and _prepare_batch_input.
+        # And _update_result should be deleted at all.
+        
         current_result = {}
         remaining_items = items.copy()
         batch_idx = 0
