@@ -1,7 +1,7 @@
 import asyncio
 from itertools import groupby
 import logging
-from typing import Any, Callable, Dict, List, Optional, cast
+from typing import Any, Awaitable, Callable, Dict, List, Optional, cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate, PromptTemplate
@@ -279,12 +279,12 @@ class Refiner(AggregationHelper, Runnable[AggregationInput, Dict[str, Any]]):
         else:
             self.tokenizer = tokenizer
 
-    async def ainvoke(self, refiner_input: AggregationInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def ainvoke(self, input: AggregationInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Process items in batches based on context window limitations"""
         from deep_reason.kg_agent.utils import KGConstructionAgentException
 
-        current_state = refiner_input.input
-        remaining_items = refiner_input.items.copy()
+        current_state = input.input
+        remaining_items = input.items.copy()
         batch_idx = 0
         batch_name = self.__class__.__name__
 
@@ -308,9 +308,9 @@ class Refiner(AggregationHelper, Runnable[AggregationInput, Dict[str, Any]]):
 
         return current_state
 
-    def invoke(self, refiner_input: AggregationInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def invoke(self, input: AggregationInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Synchronous version that runs the async method in an event loop"""
-        return asyncio.run(self.ainvoke(refiner_input, config))
+        return asyncio.run(self.ainvoke(input, config))
 
 
 class MapReducer(AggregationHelper, Runnable[AggregationInput, Dict[str, Any]]):
@@ -318,7 +318,7 @@ class MapReducer(AggregationHelper, Runnable[AggregationInput, Dict[str, Any]]):
 
     def __init__(self,
                  map_chain: Runnable[AggregationInput, Dict[str, Any]],
-                 reduce_chain: Runnable[List[Dict[str, Any]], Dict[str, Any]] | Callable[[List[Dict[str, Any]]],asyncio.Awaitable[Dict[str, Any]]],
+                 reduce_chain: Runnable[List[Dict[str, Any]], Dict[str, Any]] | Callable[[List[Dict[str, Any]]],Awaitable[Dict[str, Any]]],
                  tokenizer=None,
                  context_window_length: int = 8000):
         """Initialize the MapReducer.
@@ -340,12 +340,12 @@ class MapReducer(AggregationHelper, Runnable[AggregationInput, Dict[str, Any]]):
         else:
             self.tokenizer = tokenizer
 
-    async def ainvoke(self, input_data: AggregationInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def ainvoke(self, input: AggregationInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Process items using map-reduce pattern with parallel mapping."""
         from deep_reason.kg_agent.utils import KGConstructionAgentException
 
-        items = input_data.items
-        initial_state = input_data.input
+        items = input.items
+        initial_state = input.input
 
         if not items:
             return initial_state
@@ -393,9 +393,9 @@ class MapReducer(AggregationHelper, Runnable[AggregationInput, Dict[str, Any]]):
 
         return final_result
 
-    def invoke(self, input_data: AggregationInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def invoke(self, input: AggregationInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Synchronous version that runs the async method in an event loop."""
-        return asyncio.run(self.ainvoke(input_data, config))
+        return asyncio.run(self.ainvoke(input, config))
 
 
 class TripletsMiner(Runnable):

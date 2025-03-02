@@ -66,9 +66,9 @@ class KgStructure(BaseModel):
 
 class KGMiningWorkflowState(BaseModel):
     chunks: List[Chunk]
-    triplets: Optional[List[Triplet]] = Field(None, default_factory=list)
-    ontology: Optional[OntologyStructure] = Field(None, default_factory=dict)
-    knowledge_graph: Optional[KgStructure] = Field(None, default_factory=list)
+    triplets: Optional[List[Triplet]] = None
+    ontology: Optional[OntologyStructure] = None
+    knowledge_graph: Optional[KgStructure] = None
 
 
 class AggregationInput(BaseModel):
