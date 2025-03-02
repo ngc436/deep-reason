@@ -152,9 +152,6 @@ def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable['RefinerInpu
 
     Create or refine the ontology to categorize entity types and relationship types.
     {response_format_description}"""
-
-    class OntologyStructure(BaseModel):
-        ontology: Dict[str, List[str]] = Field(description="Categories of entities and relationships")
     
     parser = PydanticOutputParser(pydantic_object=OntologyStructure)
     
@@ -229,6 +226,10 @@ def build_kg_refining_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict
         }
     
     return RunnableLambda(_process_input) | chain | RunnableLambda(_process_output)
+
+
+class OntologyStructure(BaseModel):
+    ontology: Dict[str, List[str]] = Field(description="Categories of entities and relationships")
 
 
 class Triplet(BaseModel):
