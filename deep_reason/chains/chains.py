@@ -180,7 +180,7 @@ def build_kg_construction_chain(llm: BaseChatModel) -> Runnable['RefinerInput', 
     Identify similar entities and relationships, and provide a normalized representation.
     {response_format_description}"""
     
-    parser = PydanticOutputParser(pydantic_object=TripletList)
+    parser = PydanticOutputParser(pydantic_object=KgTripletList)
     
     chain = build_chain(llm, system_template, human_template, parser)
     
@@ -195,10 +195,10 @@ def build_kg_construction_chain(llm: BaseChatModel) -> Runnable['RefinerInput', 
             "triplet_list": formatted_triplets
         }
     
-    def _process_output(result: TripletList) -> Dict[str, Any]:
+    def _process_output(result: KgTripletList) -> Dict[str, Any]:
         # Return the deduplicated triplets
         return {
-            "deduplicated_triplets": result.triplets
+            "kg_triplet_list": result.kg_triplets
         }
     
     return RunnableLambda(_process_input) | chain | RunnableLambda(_process_output)
@@ -306,28 +306,7 @@ def build_kg_refining_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict
     
     return RunnableLambda(_process_input) | chain | RunnableLambda(_process_output)
 
-
-class OntologyRelation(BaseModel):
-    relation_id: int = Field(description="Id of the relation")
-    relation_name: str = Field(description="Name of the relation")
-    relation_instances: List[str] = Field(description="List of relation instances from triplets")
-
-class OntologyNodeConnection(BaseModel):
-    node_id_1: str = Field(description="Id of the first ontology node")
-    node_id_2: str = Field(description="Id of the second ontology node")
-    relation_id: int = Field(description="Id of the relation")
-
-class OntologyNode(BaseModel):
-    node_id: str = Field(description="Id of the ontology node")
-    entity: str = Field(description="Entity name")
-    node_instances: List[str] = Field(description="List of triplet subjects and objects that are instances of this node")
-
-# class OntologyStructure(BaseModel):
-#     ontology: Dict[str, List[OntologyNode]] = Field(description="Categories of entities and relationships")
-
-class OntologyStructure(BaseModel):
-    ontology: Dict[OntologyNode, List[OntologyNodeConnection]] = Field(description="Categories of entities and relationships")
-
+# Raw triplets
 class Triplet(BaseModel):
     triplet_id: str = Field(description="Unique identifier for the triplet")
     chunk_id: str = Field(description="Unique identifier for the chunk where the triplet was found")
@@ -338,40 +317,51 @@ class Triplet(BaseModel):
 class TripletList(BaseModel):
     triplets: List[Triplet] = Field(description="List of knowledge triplets extracted from the text")
 
+# Ontology nodes and relations
+class OntologyNode(BaseModel):
+    node_id: str = Field(description="Unique id of the ontology node")
+    entity: str = Field(description="Entity name (Entity class name)")
+
+
+class OntologyRelation(BaseModel):
+    relation_id: int = Field(description="Unique id of the relation")
+    relation_name: str = Field(description="Name of the relation (Relation class name)")
+
+
+class OntologyNodesConnection(BaseModel):
+    node_id_1: str = Field(description="Id of the first ontology node (class)")
+    node_id_2: str = Field(description="Id of the second ontology node (class)")
+    relation_id: int = Field(description="Id of the relation (Relation class)")
+
+
+class OntologyStructure(BaseModel):
+    nodes: List[OntologyNode] = Field(description="List of ontology nodes")
+    relations: List[OntologyRelation] = Field(description="List of ontology relations")
+    connections: List[OntologyNodesConnection] = Field(description="List of connections between ontology nodes")
+
+
+# Knowledge graph nodes and relations
+class KgNode(BaseModel):
+    node_id: str = Field(description="Unique identifier of the knowledge graph node")
+    entity_name: str = Field(description="Entity name")
+    ontology_node_id: str = Field(description="Id of the ontology node this entity is instance of")
+
+
 class KgTriplet(BaseModel):
-    kg_subject: str = Field(description="The entity performing the action or having the property")
-    kg_relation: str = Field(description="The relationship or action")
-    kg_object: str = Field(description="The entity receiving the action or the value of the property")
-    triplet_ids: List[str] = Field(description="Unique identifiers for the triplets that are combined to form this knowledge graph triplet")
+    kg_subject_id: str = Field(description="Id of a KgNode that is a subject in this triplet")
+    kg_object_id: str = Field(description="Id of a KgNode that is an object in this triplet")
+    ontology_nodes_connection_id: str = Field(description="Id of the ontology nodes connection that describes predicate for this two entities")
 
-class KgTripletList(BaseModel):
+
+class KgStructure(BaseModel):
     kg_triplets: List[KgTriplet] = Field(description="List of knowledge graph triplets combined from raw initial triplets")
-
-# class Entity(BaseModel):
-#     id: str = Field(description="Unique identifier for the entity")
-#     name: str = Field(description="Entity name or label")
-#     type: str = Field(description="Entity type from the ontology")
-#     properties: Dict[str, str] = Field(description="Additional properties for the entity", default_factory=dict)
-
-
-# class Relationship(BaseModel):
-#     id: str = Field(description="Unique identifier for the relationship")
-#     source: str = Field(description="Source entity ID")
-#     target: str = Field(description="Target entity ID")
-#     type: str = Field(description="Relationship type from the ontology")
-#     properties: Dict[str, str] = Field(description="Additional properties for the relationship", default_factory=dict)
-
-
-# class KnowledgeGraph(BaseModel):
-#     entities: List[Entity] = Field(description="Entities in the knowledge graph")
-#     relationships: List[Relationship] = Field(description="Relationships between entities")
 
 
 class KGMiningWorkflowState(BaseModel):
     chunks: List[Chunk]
-    triplets: List[Dict[str, Any]] = Field(default_factory=list)
-    ontology: Dict[str, List[str]] = Field(default_factory=dict)
-    knowledge_graph: List[Dict[str, Any]] = Field(default_factory=list)
+    triplets: Optional[List[Triplet]] = Field(None, default_factory=list)
+    ontology: Optional[OntologyStructure] = Field(None, default_factory=dict)
+    knowledge_graph: Optional[KgStructure] = Field(None, default_factory=list)
 
 
 class KGConstructionAgentException(Exception):
@@ -562,7 +552,7 @@ class KGConstructionAgent:
             tokenizer=self.tokenizer, 
             context_window_length=self.context_window_length
         )
-        refiner_input = RefinerInput(items=state.triplets, input={"current_ontology": state.ontology})
+        refiner_input = RefinerInput(items=state.triplets, input={"current_ontology": None})
         current_ontology = await refiner.ainvoke(input=refiner_input, config=config)
         
         # Return updated state with the refined ontology
@@ -592,8 +582,7 @@ class KGConstructionAgent:
             items=state.triplets,
             input={
                 "ontology": state.ontology,
-                "entities": state.knowledge_graph.get("entities", []),
-                "relationships": state.knowledge_graph.get("relationships", [])
+                "current_graph": None
             }
         )
         current_kg = await refiner.ainvoke(input=refiner_input, config=config)
@@ -621,12 +610,35 @@ class KGConstructionAgent:
         return wf.compile()
 
 
-async def run_kg_mining(llm: BaseChatModel, chunks: List[Chunk]) -> KGMiningWorkflowState:
+class KGMiningResult(BaseModel):
+    """Result of knowledge graph mining containing triplets, ontology and knowledge graph."""
+    triplets: List[Triplet] = Field(default_factory=list, description="The extracted triplets")
+    ontology: Optional[OntologyStructure] = Field(default=None, description="The constructed ontology")
+    knowledge_graph: Optional[KgStructure] = Field(default=None, description="The constructed knowledge graph")
+
+
+async def run_kg_mining(llm: BaseChatModel, chunks: List[Chunk], output_path: str = "kg_output") -> KGMiningWorkflowState:
     agent = KGConstructionAgent(llm)
     state = KGMiningWorkflowState(chunks=chunks)
     result = await agent.build_wf().ainvoke(state)
     result = KGMiningWorkflowState.model_validate(result)
-    # TODO: save ontology and knowledge graph to file on disk
+    
+    # Create KGMiningResult object
+    kg_mining_result = KGMiningResult(
+        triplets=result.triplets if result.triplets else [],
+        ontology=result.ontology,
+        knowledge_graph=result.knowledge_graph
+    )
+    
+    # Save results to file on disk
+    os.makedirs(output_path, exist_ok=True)
+    
+    # Save complete result
+    result_path = os.path.join(output_path, "kg_mining_result.json")
+    with open(result_path, "w") as f:
+        f.write(kg_mining_result.model_dump_json(indent=2))
+    logger.info(f"Saved KG mining result to {result_path}")
+    
     return result
 
 
