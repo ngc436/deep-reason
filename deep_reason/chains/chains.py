@@ -4,7 +4,7 @@ import json
 import logging
 import pandas as pd
 import os
-from typing import Any, Dict, List, Optional, cast, Union
+from typing import Any, Dict, List, Optional, cast, Union, TypeVar, Generic, Callable, Protocol
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 import asyncio
@@ -21,6 +21,7 @@ from langgraph.graph import StateGraph, START, END
 from langchain_core.language_models import LanguageModelInput
 from dataclasses import dataclass
 from itertools import groupby
+from abc import ABC, abstractmethod
 
 from deep_reason.envs import OPENAI_API_BASE, OPENAI_API_KEY
 from deep_reason.schemes import Chunk
@@ -227,6 +228,259 @@ class KGConstructionAgentException(Exception):
     pass
 
 
+# Define a type variable for our batch input
+T = TypeVar('T')
+R = TypeVar('R')
+
+class Refiner(Runnable[List[T], Dict[str, Any]], ABC):
+    """Abstract class for refining data in batches with LLM chains"""
+    
+    def __init__(self, llm: BaseChatModel, tokenizer=None, context_window_length: int = 8000):
+        self.llm = llm
+        self.context_window_length = context_window_length
+        if tokenizer is None:
+            # default tokenizer if nothing provided
+            self.tokenizer = tiktoken.get_encoding("cl100k_base")
+        elif isinstance(tokenizer, str):
+            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+        else:
+            self.tokenizer = tokenizer
+        
+        self.chain = self._build_chain()
+    
+    @abstractmethod
+    def _build_chain(self) -> Runnable:
+        """Build the LLM chain used for refining"""
+        pass
+    
+    @abstractmethod
+    def _prepare_batch_input(self, batch: List[T], current_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Prepare input for the chain based on current batch and results"""
+        pass
+    
+    @abstractmethod
+    def _create_batch(self, remaining_items: List[T], current_result: Dict[str, Any]) -> tuple[List[T], List[T]]:
+        """Create a batch of items that fits within the context window"""
+        pass
+    
+    @abstractmethod
+    def _update_result(self, chain_output: Any) -> Dict[str, Any]:
+        """Update the accumulated result with the chain output"""
+        pass
+    
+    async def ainvoke(self, items: List[T], config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Process items in batches based on context window limitations"""
+        current_result = {}
+        remaining_items = items.copy()
+        batch_idx = 0
+        batch_name = self.__class__.__name__
+        
+        while remaining_items:
+            try:
+                # Create the next batch based on context window limitations
+                current_batch, remaining_items = self._create_batch(remaining_items, current_result)
+                
+                batch_idx += 1
+                logger.info(f"Processing {batch_name} batch {batch_idx} with {len(current_batch)} items. Remaining: {len(remaining_items)}")
+                
+                # Prepare input for the chain
+                chain_input = self._prepare_batch_input(current_batch, current_result)
+                
+                # Process batch
+                with measure_time(f"processing {batch_name} batch {batch_idx}"):
+                    result = await self.chain.ainvoke(chain_input)
+                
+                # Update result with chain output
+                current_result = self._update_result(result)
+                
+            except Exception as e:
+                # Handle exceptions
+                error_msg = f"Error processing {batch_name} batch {batch_idx}: {str(e)}"
+                logger.error(error_msg)
+                raise KGConstructionAgentException(error_msg)
+        
+        return current_result
+    
+    def invoke(self, items: List[T], config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Synchronous version that runs the async method in an event loop"""
+        return asyncio.run(self.ainvoke(items, config))
+
+
+class OntologyRefiner(Refiner[Dict[str, Any]]):
+    """Refiner for constructing and refining an ontology from triplets"""
+    
+    def _build_chain(self) -> Runnable:
+        return build_ontology_refinement_chain(self.llm)
+    
+    def _prepare_batch_input(self, batch: List[Dict[str, Any]], current_result: Dict[str, Any]) -> Dict[str, Any]:
+        formatted_items = "\n".join([
+            f"- Subject: {t['triplet'].subject}, Predicate: {t['triplet'].predicate}, Object: {t['triplet'].object}"
+            for t in batch
+        ])
+        
+        formatted_result = json.dumps(current_result, indent=2) if current_result else "Empty ontology"
+        
+        return {
+            "triplets": formatted_items,
+            "current_ontology": formatted_result
+        }
+    
+    def _create_batch(self, remaining_items: List[Dict[str, Any]], current_result: Dict[str, Any]) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        def estimate_triplet_size(triplet):
+            t = triplet["triplet"]
+            return len(t.subject) + len(t.predicate) + len(t.object) + 10  # +10 for JSON structure overhead
+
+        # Calculate current result size
+        result_size = len(json.dumps(current_result)) + 200  # Add buffer
+        
+        # Dynamically form the next batch based on current result size
+        current_batch = []
+        current_batch_size = 0
+        max_batch_size = (self.context_window_length - result_size) // 2
+        
+        # Make a copy of remaining items to avoid modifying the original during batch creation
+        updated_remaining = remaining_items.copy()
+        
+        # Add items to the batch until we reach the size limit
+        while updated_remaining and current_batch_size < max_batch_size:
+            item = updated_remaining[0]
+            item_size = estimate_triplet_size(item)
+            
+            if current_batch_size + item_size <= max_batch_size:
+                current_batch.append(item)
+                current_batch_size += item_size
+                updated_remaining.pop(0)
+            else:
+                # This item would exceed the batch size limit
+                break
+        
+        # If we couldn't fit any items, take at least one (necessary for progress)
+        if not current_batch and updated_remaining:
+            current_batch.append(updated_remaining.pop(0))
+            
+        return current_batch, updated_remaining
+    
+    def _update_result(self, chain_output: Any) -> Dict[str, Any]:
+        return chain_output.ontology
+
+
+class KnowledgeGraphRefiner(Refiner[Dict[str, Any]]):
+    """Refiner for constructing and refining a knowledge graph from triplets and ontology"""
+    
+    def _build_chain(self) -> Runnable:
+        return build_kg_refining_chain(self.llm)
+    
+    def _prepare_batch_input(self, batch: List[Dict[str, Any]], current_result: Dict[str, Any]) -> Dict[str, Any]:
+        # Extract ontology from current_result (it will be stored there during initialization)
+        ontology = current_result.get("ontology", {})
+        
+        formatted_items = "\n".join([
+            f"- Subject: {t['triplet'].subject}, Predicate: {t['triplet'].predicate}, Object: {t['triplet'].object}"
+            for t in batch
+        ])
+        
+        formatted_ontology = json.dumps(ontology, indent=2) if ontology else "Empty ontology"
+        
+        formatted_kg = "Empty knowledge graph"
+        if current_result.get("entities"):
+            formatted_kg = json.dumps(current_result, indent=2)
+        
+        return {
+            "triplets": formatted_items,
+            "current_ontology": formatted_ontology,
+            "current_kg": formatted_kg
+        }
+    
+    def _create_batch(self, remaining_items: List[Dict[str, Any]], current_result: Dict[str, Any]) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        def estimate_triplet_size(triplet):
+            t = triplet["triplet"]
+            return len(t.subject) + len(t.predicate) + len(t.object) + 10  # +10 for JSON structure overhead
+
+        # Calculate current result size
+        ontology = current_result.get("ontology", {})
+        result_size = len(json.dumps(current_result)) + len(json.dumps(ontology)) + 200  # Add buffer
+        
+        # Dynamically form the next batch based on current result size
+        current_batch = []
+        current_batch_size = 0
+        max_batch_size = (self.context_window_length - result_size) // 2
+        
+        # Make a copy of remaining items to avoid modifying the original during batch creation
+        updated_remaining = remaining_items.copy()
+        
+        # Add items to the batch until we reach the size limit
+        while updated_remaining and current_batch_size < max_batch_size:
+            item = updated_remaining[0]
+            item_size = estimate_triplet_size(item)
+            
+            if current_batch_size + item_size <= max_batch_size:
+                current_batch.append(item)
+                current_batch_size += item_size
+                updated_remaining.pop(0)
+            else:
+                # This item would exceed the batch size limit
+                break
+        
+        # If we couldn't fit any items, take at least one (necessary for progress)
+        if not current_batch and updated_remaining:
+            current_batch.append(updated_remaining.pop(0))
+            
+        return current_batch, updated_remaining
+    
+    def _update_result(self, chain_output: Any) -> Dict[str, Any]:
+        # Preserve ontology in the result
+        current_result = {
+            "ontology": chain_output.get("ontology", {}),  # Preserve the ontology
+            "entities": chain_output.entities,
+            "relationships": chain_output.relationships
+        }
+        return current_result
+    
+    async def ainvoke(self, data: Dict[str, Any], config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Process triplets and ontology to create a knowledge graph"""
+        # Extract triplets and ontology from the input
+        triplets = data.get("triplets", [])
+        ontology = data.get("ontology", {})
+        
+        # Initialize current_result with the ontology
+        current_result = {"ontology": ontology}
+        
+        # Process triplets in batches
+        remaining_items = triplets.copy()
+        batch_idx = 0
+        batch_name = self.__class__.__name__
+        
+        while remaining_items:
+            try:
+                # Create the next batch based on context window limitations
+                current_batch, remaining_items = self._create_batch(remaining_items, current_result)
+                
+                batch_idx += 1
+                logger.info(f"Processing {batch_name} batch {batch_idx} with {len(current_batch)} items. Remaining: {len(remaining_items)}")
+                
+                # Prepare input for the chain
+                chain_input = self._prepare_batch_input(current_batch, current_result)
+                
+                # Process batch
+                with measure_time(f"processing {batch_name} batch {batch_idx}"):
+                    result = await self.chain.ainvoke(chain_input)
+                
+                # Update result with chain output
+                current_result = self._update_result(result)
+                
+            except Exception as e:
+                # Handle exceptions
+                error_msg = f"Error processing {batch_name} batch {batch_idx}: {str(e)}"
+                logger.error(error_msg)
+                raise KGConstructionAgentException(error_msg)
+        
+        return current_result
+    
+    def invoke(self, data: Dict[str, Any], config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Synchronous version that runs the async method in an event loop"""
+        return asyncio.run(self.ainvoke(data, config))
+
+
 class KGConstructionAgent:
     def __init__(self, llm: BaseChatModel, tokenizer: Optional[PreTrainedTokenizerBase | str] = None, context_window_length: int = 8000):
         self.llm = llm
@@ -306,152 +560,15 @@ class KGConstructionAgent:
             knowledge_graph=state.knowledge_graph
         )
     
-    async def _refine_in_batches(self, chain, items: List[Triplet], batch_type="ontology"):
-        # TODO: make this function in a separate class inherited from Runnable and called Refiner
-        # 0. Refiner should be abstract class inherited from Runnable and ABC.It should has abstract method '_prepare_batch_input'
-        # 1. the logic of batching should be the same as it is now
-        # 2. Everything from '# Format items and current result for the chain' to '# Process items iteratively, updating the result with each batch' 
-        # should be moved into a separate method '_prepare_batch_input'. This method also should receive current_result. 
-        # The method will produce inputs for the chain and the class will give an opportunity to redefine this method in a child class.
-        # 3. Current consumers should have their own child classes implementing '_prepare_batch_input', appropriate for their chains
-        # 4. Building of the respective chains may be moved into this class as well as class-level methods        
-        """Process items in batches based on context window limitations.
-        
-        Args:
-            chain: The LangChain chain to process each batch
-            items: List of items to process
-            batch_type: Type of batch processing ("ontology" or "knowledge graph")
-        
-        Returns:
-            The final updated result after processing all batches
-        """
-        # Define helper functions for batch processing
-        def format_triplets(triplets):
-            return "\n".join([
-                f"- Subject: {t['triplet'].subject}, Predicate: {t['triplet'].predicate}, Object: {t['triplet'].object}"
-                for t in triplets
-            ])
-        
-        def format_ontology(result):
-            if batch_type == "ontology":
-                return json.dumps(result, indent=2) if result else "Empty ontology"
-            else:
-                return json.dumps(result.get("ontology", {}), indent=2) if result.get("ontology") else "Empty ontology"
-        
-        def update_result(result):
-            if batch_type == "ontology":
-                return result.ontology
-            else:
-                return {
-                    "ontology": result.ontology,
-                    "entities": result.entities,
-                    "relationships": result.relationships
-                }
-        
-        # Track the remaining items to process
-        current_result = dict()
-        remaining_items = items.copy()
-        batch_idx = 0
-        batch_name = "knowledge graph" if batch_type == "knowledge graph" else "ontology batch"
-        
-        # Process items iteratively, updating the result with each batch
-        while remaining_items:
-            try:
-                # Create the next batch based on context window limitations
-                current_batch, remaining_items = self._create_batch(remaining_items, current_result)
-                
-                batch_idx += 1
-                logger.info(f"Processing {batch_name} {batch_idx} with {len(current_batch)} items. Remaining: {len(remaining_items)}")
-                
-                # Format items and current result for the chain
-                formatted_items = format_triplets(current_batch)
-                formatted_result = format_ontology(current_result)
-                
-                # Prepare input for the chain
-                chain_input = {
-                    "triplets": formatted_items,
-                    "current_ontology": formatted_result
-                }
-                
-                # Add any additional inputs specific to the chain
-                if batch_type == "knowledge graph":
-                    chain_input["current_kg"] = "Empty knowledge graph" if not current_result.get("entities") else json.dumps(current_result, indent=2)
-                
-                # Process batch
-                with measure_time(f"processing {batch_name} {batch_idx}"):
-                    result = await chain.ainvoke(chain_input)
-                
-                # Update result with chain output
-                current_result = update_result(result)
-                
-            except Exception as e:
-                # Handle exceptions
-                error_msg = f"Error processing {batch_name} {batch_idx}: {str(e)}"
-                logger.error(error_msg)
-                raise KGConstructionAgentException(error_msg)
-        
-        return current_result
-    
-    def _create_batch(self, remaining_items, current_result):
-        """Create a batch of items that fits within the context window.
-        
-        Args:
-            remaining_items: List of items still to be processed
-            current_result: Current accumulated result
-            estimate_size_func: Function to estimate size of an item
-            
-        Returns:
-            Tuple of (current_batch, updated_remaining_items)
-        """
-        def estimate_triplet_size(triplet):
-            t = triplet["triplet"]
-            return len(t.subject) + len(t.predicate) + len(t.object) + 10  # +10 for JSON structure overhead
-
-        # Calculate current result size
-        result_size = len(json.dumps(current_result)) + 200  # Add buffer
-        
-        # Dynamically form the next batch based on current result size
-        current_batch = []
-        current_batch_size = 0
-        max_batch_size = (self.context_window_length - result_size) // 2
-        
-        # Make a copy of remaining items to avoid modifying the original during batch creation
-        updated_remaining = remaining_items.copy()
-        
-        # Add items to the batch until we reach the size limit
-        while updated_remaining and current_batch_size < max_batch_size:
-            item = updated_remaining[0]
-            item_size = estimate_triplet_size(item)
-            
-            if current_batch_size + item_size <= max_batch_size:
-                current_batch.append(item)
-                current_batch_size += item_size
-                updated_remaining.pop(0)
-            else:
-                # This item would exceed the batch size limit
-                break
-        
-        # If we couldn't fit any items, take at least one (necessary for progress)
-        if not current_batch and updated_remaining:
-            current_batch.append(updated_remaining.pop(0))
-            
-        return current_batch, updated_remaining
-
     async def ontology_refining(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
-        # 0. Check for empty triplets
+        # Check for empty triplets
         if not state.triplets:
             logger.error("No triplets found in state, cannot construct ontology")
             raise KGConstructionAgentException("Cannot construct ontology from empty triplets")
         
-        # 1. Build the chain for ontology refinement
-        chain = build_ontology_refinement_chain(self.llm)
-        
-        # Process triplets in batches
-        current_ontology = await self._refine_in_batches(
-            chain=chain,
-            items=state.triplets,
-            batch_type="ontology"
-        )
+        # Use the OntologyRefiner
+        refiner = OntologyRefiner(self.llm, self.tokenizer, self.context_window_length)
+        current_ontology = await refiner.ainvoke(state.triplets)
         
         # Return updated state with the refined ontology
         return KGMiningWorkflowState(
@@ -462,31 +579,27 @@ class KGConstructionAgent:
         )
 
     async def kg_refining(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
-        # 0. Check for empty triplets
-        if not state.triplets or not state.ontology:
-            logger.error("No triplets or ontology found in state")
-            raise KGConstructionAgentException("Cannot build knowledge graph without triplets and ontology")
+        # Check for empty triplets or ontology
+        if not state.triplets:
+            logger.error("No triplets found in state, cannot build knowledge graph")
+            raise KGConstructionAgentException("Cannot build knowledge graph without triplets")
         
-        # 1. Check for empty ontology
         if not state.ontology:
-            logger.warning("No ontology found in state, cannot build knowledge graph")
+            logger.error("No ontology found in state, cannot build knowledge graph")
             raise KGConstructionAgentException("Cannot build knowledge graph without ontology")
         
-        # 2. Build the chain for knowledge graph refinement
-        chain = build_kg_refining_chain(self.llm)
+        # Use the KnowledgeGraphRefiner with both triplets and ontology as inputs
+        refiner = KnowledgeGraphRefiner(self.llm, self.tokenizer, self.context_window_length)
+        current_kg = await refiner.ainvoke({
+            "triplets": state.triplets,
+            "ontology": state.ontology
+        })
         
-        # 3. Process triplets in batches using the same helper method as ontology_refining
-        current_kg = await self._refine_in_batches(
-            chain=chain,
-            items=state.triplets,
-            batch_type="knowledge graph"
-        )
-        
-        # 4. Return updated state with the refined knowledge graph
+        # Return updated state with the refined knowledge graph
         return KGMiningWorkflowState(
             chunks=state.chunks,
             triplets=state.triplets,
-            ontology=state.ontology,  # Keep the existing ontology
+            ontology=state.ontology,
             knowledge_graph=current_kg
         )
 
