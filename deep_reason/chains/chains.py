@@ -4,7 +4,7 @@ import json
 import logging
 import pandas as pd
 import os
-from typing import Any, Dict, List, Optional, Tuple, cast, Union, TypeVar, Generic, Callable, Protocol
+from typing import Any, Awaitable, Dict, List, Optional, Tuple, cast, Union, TypeVar, Generic, Callable, Protocol
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 import asyncio
@@ -204,7 +204,7 @@ Current chunk: {current_chunk}
 #     return RunnableLambda(_process_input) | chain | RunnableLambda(_process_output)
 
 
-def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict[str, Any]]:
+def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable['AggregationInput', Dict[str, Any]]:
     system_template = """You are an expert knowledge graph engineer. Your task is to construct and refine an ontology 
     based on knowledge triplets extracted from text. An ontology consists of entity types and relationship types.
 
@@ -237,7 +237,7 @@ def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable['RefinerInpu
     
     chain = build_chain(llm, system_template, human_template, parser)
     
-    def _process_input(refiner_input: RefinerInput):
+    def _process_input(refiner_input: AggregationInput):
         # Extract triplets from items list
         current_ontology = refiner_input.input.get("current_ontology", None)
         if not current_ontology:
@@ -261,7 +261,7 @@ def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable['RefinerInpu
     return RunnableLambda(_process_input) | chain | RunnableLambda(_process_output)
 
 
-def build_kg_refining_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict[str, Any]]:
+def build_kg_refining_chain(llm: BaseChatModel) -> Runnable['AggregationInput', Dict[str, Any]]:
     system_template = """You are an expert knowledge graph engineer. Your task is to build a knowledge graph using the provided triplets and ontology.
 
     The knowledge graph consists of a set of triplets that contain:
@@ -290,7 +290,7 @@ def build_kg_refining_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict
     
     chain = build_chain(llm, system_template, human_template, parser)
     
-    def _process_input(refiner_input: RefinerInput):
+    def _process_input(refiner_input: AggregationInput):
         ontology = refiner_input.input.get("ontology", None)
         if not ontology:
             raise KGConstructionAgentException("No ontology provided for kg refining chain")
@@ -326,10 +326,6 @@ def build_kg_refining_chain(llm: BaseChatModel) -> Runnable['RefinerInput', Dict
         | RunnableParallel(result=chain, inputs=RunnablePassthrough()) 
         | RunnableLambda(_process_output)
     )
-
-
-# class KGMapReduceChain(Runnable[, KgStructure]):
-#     pass
 
 
 # Raw triplets
@@ -394,25 +390,16 @@ class KGConstructionAgentException(Exception):
     pass
 
 
-class RefinerInput(BaseModel):
+class AggregationInput(BaseModel):
     items: List[Triplet] = Field(..., description="List of triplets to process")
     input: Dict[str, Any] = Field(..., description="Additional input for the internal refine chain")
 
 
-class Refiner(Runnable[RefinerInput, Dict[str, Any]]):
-    """Abstract class for refining data in batches with LLM chains"""
-    
-    def __init__(self, refine_chain: Runnable[RefinerInput, Dict[str, Any]], tokenizer=None, context_window_length: int = 8000):
-        self.refine_chain = refine_chain
-        self.context_window_length = context_window_length
-        if tokenizer is None:
-            # default tokenizer if nothing provided
-            self.tokenizer = tiktoken.get_encoding("cl100k_base")
-        elif isinstance(tokenizer, str):
-            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-        else:
-            self.tokenizer = tokenizer
-    
+
+class AggregationHelper(ABC):
+    tokenizer: tiktoken.Encoding | PreTrainedTokenizerBase
+    context_window_length: int
+
     def _estimate_size_in_tokens(self, state: Dict[str, Any] | BaseModel | str) -> str:
         if isinstance(state, BaseModel):
             text = state.model_dump_json()
@@ -423,14 +410,14 @@ class Refiner(Runnable[RefinerInput, Dict[str, Any]]):
     
         return len(self.tokenizer.encode(text))
 
-    def _create_batch(self, remaining_items: List[Triplet], current_state: Dict[str, Any] | BaseModel | str) -> Tuple[RefinerInput, List[Triplet]]:
+    def _create_batch(self, remaining_items: List[Triplet], current_state: Dict[str, Any] | BaseModel | str) -> Tuple[AggregationInput, List[Triplet]]:
         """Create a batch of items that fits within the context window"""
         # Calculate current state size
         state_size = self._estimate_size_in_tokens(current_state)       
         # Dynamically form the next batch based on current state size
         current_batch = []
         current_batch_size = 0
-        max_batch_size = (self.context_window_length - state_size) // 2
+        max_batch_size = self.context_window_length - state_size
         
         # Make a copy of remaining items to avoid modifying the original during batch creation
         updated_remaining = remaining_items.copy()
@@ -454,9 +441,24 @@ class Refiner(Runnable[RefinerInput, Dict[str, Any]]):
                 "Cannot pack a single item into the batch due to too long context (most probably due to too long result generated on the previous iteration)"
             )
             
-        return RefinerInput(items=current_batch, input=current_state), updated_remaining
+        return AggregationInput(items=current_batch, input=current_state), updated_remaining
+
+
+class Refiner(AggregationHelper, Runnable[AggregationInput, Dict[str, Any]]):
+    """Abstract class for refining data in batches with LLM chains"""
     
-    async def ainvoke(self, refiner_input: RefinerInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def __init__(self, refine_chain: Runnable[AggregationInput, Dict[str, Any]], tokenizer=None, context_window_length: int = 8000):
+        self.refine_chain = refine_chain
+        self.context_window_length = context_window_length
+        if tokenizer is None:
+            # default tokenizer if nothing provided
+            self.tokenizer = tiktoken.get_encoding("cl100k_base")
+        elif isinstance(tokenizer, str):
+            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+        else:
+            self.tokenizer = tokenizer
+    
+    async def ainvoke(self, refiner_input: AggregationInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Process items in batches based on context window limitations"""
         current_state = refiner_input.input
         remaining_items = refiner_input.items.copy()
@@ -483,24 +485,99 @@ class Refiner(Runnable[RefinerInput, Dict[str, Any]]):
         
         return current_state
     
-    def invoke(self, refiner_input: RefinerInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def invoke(self, refiner_input: AggregationInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Synchronous version that runs the async method in an event loop"""
         return asyncio.run(self.ainvoke(refiner_input, config))
 
 
-class KGConstructionAgent:
-    def __init__(self, llm: BaseChatModel, tokenizer: Optional[PreTrainedTokenizerBase | str] = None, context_window_length: int = 8000):
-        self.llm = llm
+class MapReducer(AggregationHelper, Runnable[AggregationInput, Dict[str, Any]]):
+    """Process items by first mapping them individually and then reducing the results."""
+    
+    def __init__(self, 
+                 map_chain: Runnable[AggregationInput, Dict[str, Any]], 
+                 reduce_chain: Runnable[List[Dict[str, Any]], Dict[str, Any]] | Callable[[List[Dict[str, Any]]],Awaitable[Dict[str, Any]]],
+                 tokenizer=None, 
+                 context_window_length: int = 8000):
+        """Initialize the MapReducer.
+        
+        Args:
+            map_chain: Chain to apply to each item or batch of items
+            reduce_chain: Chain to combine results from map phase
+            tokenizer: Tokenizer to use for estimating token counts
+            context_window_length: Maximum context window size in tokens
+        """
+        self.map_chain = map_chain
+        self.reduce_chain = reduce_chain
         self.context_window_length = context_window_length
         if tokenizer is None:
             # default tokenizer if nothing provided
-            # better than nothing
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
         elif isinstance(tokenizer, str):
             self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
         else:
             self.tokenizer = tokenizer
+    
+    async def ainvoke(self, input_data: AggregationInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Process items using map-reduce pattern with parallel mapping."""
+        items = input_data.items
+        initial_state = input_data.input
+        
+        if not items:
+            return initial_state
+        
+        # Create batches for parallel processing
+        batches = self._create_batch(items, initial_state)
+        logger.info(f"Created {len(batches)} batches for parallel processing")
+        
+        # Map phase: Process all batches in parallel
+        with measure_time("parallel map phase"):
+            map_results = await self.map_chain.abatch(batches, config=config)
+        
+        # Filter out exceptions
+        valid_results = []
+        for i, result in enumerate(map_results):
+            if isinstance(result, Exception):
+                logger.error(f"Error processing batch {i}: {result}")
+            else:
+                valid_results.append(result)
+        
+        if not valid_results:
+            logger.error("No valid results from map phase")
+            raise KGConstructionAgentException("No valid results from map phase")
+        
+        # Reduce phase: Combine all results
+        logger.info(f"Starting reduce phase with {len(valid_results)} results")
+        
+        try:
+            with measure_time("processing reduce phase"):
+                # Process with reduce chain
+                if isinstance(self.reduce_chain, Runnable):
+                    final_result = await self.reduce_chain.ainvoke(valid_results, config=config)
+                else:
+                    final_result = await self.reduce_chain(valid_results)
+                
+        except Exception as e:
+            error_msg = f"Error in reduce phase: {str(e)}"
+            logger.error(error_msg)
+            raise KGConstructionAgentException(error_msg)
+    
+        return final_result
 
+    def invoke(self, input_data: AggregationInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Synchronous version that runs the async method in an event loop."""
+        return asyncio.run(self.ainvoke(input_data, config))
+
+
+class KGConstructionAgent:
+    def __init__(self, 
+                 llm: BaseChatModel, 
+                 tokenizer: Optional[PreTrainedTokenizerBase | str] = None, 
+                 context_window_length: int = 8000, 
+                 use_refine_for_kg: bool = False):
+        self.llm = llm
+        self.context_window_length = context_window_length
+        self.tokenizer = tokenizer
+        self.use_refine_for_kg = use_refine_for_kg
 
     async def triplets_mining(self, state: KGMiningWorkflowState, config: Optional[Dict[str, Any]] = None) -> KGMiningWorkflowState:
         # 1. Order chunks by document_id and order_id
@@ -578,7 +655,7 @@ class KGConstructionAgent:
             tokenizer=self.tokenizer, 
             context_window_length=self.context_window_length
         )
-        refiner_input = RefinerInput(items=state.triplets, input={"current_ontology": None})
+        refiner_input = AggregationInput(items=state.triplets, input={"current_ontology": None})
         result = await refiner.ainvoke(input=refiner_input, config=config)
         current_ontology = result["current_ontology"]
 
@@ -600,19 +677,29 @@ class KGConstructionAgent:
             logger.error("No ontology found in state, cannot build knowledge graph")
             raise KGConstructionAgentException("Cannot build knowledge graph without ontology")
         
-        refiner = Refiner(
-            refine_chain=build_kg_refining_chain(self.llm), 
-            tokenizer=self.tokenizer, 
-            context_window_length=self.context_window_length
-        )
-        refiner_input = RefinerInput(
+        if self.use_refine_for_kg:
+            chain = Refiner(
+                refine_chain=build_kg_refining_chain(self.llm), 
+                tokenizer=self.tokenizer, 
+                context_window_length=self.context_window_length
+            )
+        else:
+            chain = MapReducer(
+                # TODO:redefine this two functions
+                map_chain=build_kg_refining_chain(self.llm),
+                reduce_chain=build_kg_refining_chain(self.llm),
+                tokenizer=self.tokenizer,
+                context_window_length=self.context_window_length
+            )
+
+        agg_input = AggregationInput(
             items=state.triplets,
             input={
                 "ontology": state.ontology,
                 "current_graph": None
             }
         )
-        result = await refiner.ainvoke(input=refiner_input, config=config)
+        result = await chain.ainvoke(input=agg_input, config=config)
         current_kg = result["current_graph"]
         
         # Return updated state with the refined knowledge graph
