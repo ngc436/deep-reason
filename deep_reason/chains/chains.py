@@ -26,6 +26,8 @@ from deep_reason.envs import OPENAI_API_BASE, OPENAI_API_KEY
 from deep_reason.schemes import Chunk
 from deep_reason.utils import VLLMChatOpenAI
 from examples.kg_extraction import load_obliqa_dataset
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
+import tiktoken
 
 
 logging.basicConfig(
@@ -145,6 +147,33 @@ Current chunk: {current_chunk}
     return build_chain(llm, system_template, human_template, parser)
 
 
+def build_ontology_refinement_chain(llm: BaseChatModel) -> Runnable:
+    system_template = """You are an expert knowledge graph engineer. Your task is to construct and refine an ontology 
+    based on knowledge triplets extracted from text. An ontology consists of entity types and relationship types.
+
+    For each triplet (subject, predicate, object):
+    1. Identify entity types for both subject and object
+    2. Categorize relationship types for predicates
+    3. Organize these into a hierarchical structure where appropriate"""
+
+    human_template = """Process the following knowledge triplets to create or refine an ontology:
+
+    {triplets}
+
+    Current Ontology:
+    {current_ontology}
+
+    Create or refine the ontology to categorize entity types and relationship types.
+    {response_format_description}"""
+
+    class OntologyStructure(BaseModel):
+        ontology: Dict[str, List[str]] = Field(description="Categories of entities and relationships")
+    
+    parser = PydanticOutputParser(pydantic_object=OntologyStructure)
+    
+    return build_chain(llm, system_template, human_template, parser)
+
+
 def build_ontology_and_kg_compiling_chain(llm: BaseChatModel) -> Runnable:
     system_template = """You are an expert knowledge graph engineer. Your task is to organize extracted knowledge triplets into:
 1. An ontology - categorizing entities and relationships
@@ -187,9 +216,18 @@ Please analyze these triplets and update both the ontology and knowledge graph.
 
 
 class KGConstructionAgent:
-    def __init__(self, llm: BaseChatModel, context_window_length: int = 8000):
+    def __init__(self, llm: BaseChatModel, tokenizer: Optional[PreTrainedTokenizerBase | str] = None, context_window_length: int = 8000):
         self.llm = llm
         self.context_window_length = context_window_length
+        if tokenizer is None:
+            # default tokenizer if nothing provided
+            # better than nothing
+            self.tokenizer = tiktoken.get_encoding("cl100k_base")
+        elif isinstance(tokenizer, str):
+            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+        else:
+            self.tokenizer = tokenizer
+
 
     async def triplets_mining(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
         # 1. Order chunks by document_id and order_id
@@ -247,6 +285,100 @@ class KGConstructionAgent:
             chunks=state.chunks,
             triplets=valid_results,
             ontology=state.ontology,
+            knowledge_graph=state.knowledge_graph
+        )
+    
+    async def ontology_mining(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
+        # 0. Check for empty triplets
+        if not state.triplets:
+            logger.warning("No triplets found in state, cannot construct ontology")
+            raise Exception("Cannot construct ontology from empty triplets")
+        
+        # 1. Build the chain for ontology refinement
+        chain = build_ontology_refinement_chain(self.llm)
+        
+        # Initialize empty ontology
+        current_ontology = {}
+        
+        # Estimate triplet size for batching (rough approximation)
+        def estimate_triplet_size(triplet):
+            t = triplet["triplet"]
+            return len(t.subject) + len(t.predicate) + len(t.object) + 10  # +10 for JSON structure overhead
+        
+        # Sort triplets by document and then chunk order
+        sorted_triplets = sorted(
+            state.triplets, 
+            key=lambda x: (x["chunk"].document_id, x["chunk"].order_id)
+        )
+        
+        # Track the remaining triplets to process
+        remaining_triplets = sorted_triplets.copy()
+        batch_idx = 0
+        
+        # 4. Process triplets iteratively, refining the ontology with each batch
+        while remaining_triplets:
+            try:
+                # Calculate current ontology size
+                ontology_size = len(json.dumps(current_ontology)) + 200  # Add buffer
+                
+                # Dynamically form the next batch based on current ontology size
+                current_batch = []
+                current_batch_size = 0
+                max_batch_size = (self.context_window_length - ontology_size) // 2
+                
+                # Add triplets to the batch until we reach the size limit
+                while remaining_triplets and current_batch_size < max_batch_size:
+                    triplet = remaining_triplets[0]
+                    triplet_size = estimate_triplet_size(triplet)
+                    
+                    if current_batch_size + triplet_size <= max_batch_size:
+                        current_batch.append(triplet)
+                        current_batch_size += triplet_size
+                        remaining_triplets.pop(0)
+                    else:
+                        # This triplet would exceed the batch size limit
+                        break
+                
+                # If we couldn't fit any triplets, take at least one (necessary for progress)
+                if not current_batch and remaining_triplets:
+                    current_batch.append(remaining_triplets.pop(0))
+                
+                batch_idx += 1
+                logger.info(f"Processing ontology batch {batch_idx} with {len(current_batch)} triplets. Remaining: {len(remaining_triplets)}")
+                
+                # Format triplets for the chain
+                triplets_text = "\n".join([
+                    f"- Subject: {t['triplet'].subject}, Predicate: {t['triplet'].predicate}, Object: {t['triplet'].object}"
+                    for t in current_batch
+                ])
+                
+                # Format current ontology
+                current_ontology_text = json.dumps(current_ontology, indent=2) if current_ontology else "Empty ontology"
+                
+                # Prepare input for the chain
+                chain_input = {
+                    "triplets": triplets_text,
+                    "current_ontology": current_ontology_text
+                }
+                
+                # Process batch
+                with measure_time(f"processing ontology batch {batch_idx}"):
+                    result = await chain.ainvoke(chain_input)
+                
+                # Update ontology with results
+                current_ontology = result.ontology
+                
+            except Exception as e:
+                # 5. Handle exceptions
+                error_msg = f"Error processing ontology batch {batch_idx}: {str(e)}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+        
+        # 6. Return updated state with the refined ontology
+        return KGMiningWorkflowState(
+            chunks=state.chunks,
+            triplets=state.triplets,
+            ontology=current_ontology,
             knowledge_graph=state.knowledge_graph
         )
 
