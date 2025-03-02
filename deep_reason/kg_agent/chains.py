@@ -414,12 +414,13 @@ class TripletsMiner(Runnable):
         Returns:
             List of dictionaries containing chunk and triplet information
         """
+        logger.info(f"Sorting chunks by document_id and order_id for {len(chunks)} chunks")
         # 1. Order chunks by document_id and order_id
         chunks = sorted(chunks, key=lambda x: (x.document_id, x.order_id))
         
         # 2. Create chunk tuples with sliding window approach
         chunk_tuples = []
-        
+        logger.info(f"Creating chunks tuples by document_id and order_id for {len(chunks)} chunks")
         # Group chunks by document_id
         for _, doc_chunks in groupby(chunks, key=lambda x: x.document_id):
             doc_chunks_list = list(doc_chunks)
@@ -438,6 +439,7 @@ class TripletsMiner(Runnable):
         chain = build_triplets_mining_chain(self.llm)
         
         # 4. Process chunk tuples using batch method
+        logger.info(f"Forming batches for {len(chunk_tuples)} chunk tuples")
         inputs = []
         for ct in chunk_tuples:
             input_dict = {
@@ -449,6 +451,7 @@ class TripletsMiner(Runnable):
             }
             inputs.append(input_dict)
         
+        logger.info(f"Processing {len(inputs)} inputs")
         results = await chain.abatch(inputs, return_exceptions=True, config=config)
         
         # 5. Handle exceptions

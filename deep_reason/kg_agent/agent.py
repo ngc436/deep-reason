@@ -186,7 +186,7 @@ async def run_kg_mining(llm: BaseChatModel, chunks: List[Chunk], output_path: st
 
     agent = KGConstructionAgent(llm)
     state = KGMiningWorkflowState(chunks=chunks)
-    result = await agent.build_wf().ainvoke(state)
+    result = await agent.build_wf().ainvoke(state, config={"max_concurrency": 100})
     result = KGMiningWorkflowState.model_validate(result)
     
     # Create KGMiningResult object
@@ -217,7 +217,7 @@ def main():
 
     chunks = load_obliqa_dataset(obliqa_dir="datasets/ObliQA/StructuredRegulatoryDocuments")
 
-    asyncio.run(run_kg_mining(llm, chunks[:10]))
+    asyncio.run(run_kg_mining(llm, chunks))
 
 if __name__ == "__main__":
     logging.basicConfig(
