@@ -157,6 +157,8 @@ async def run_kg_mining(llm: BaseChatModel, chunks: List[Chunk], output_path: st
         with open(ontology_path, "rb") as f:
             current_ontology = pickle.load(f)
 
+    k = 0
+
     # kg_path = "/tmp/kg.pickle"
     # if os.path.exists(kg_path):
     #     chain = MapReducer(
