@@ -228,20 +228,16 @@ class KGConstructionAgentException(Exception):
     pass
 
 
-# Define a type variable for our batch input
-T = TypeVar('T')
-R = TypeVar('R')
-
 class RefinerInput(BaseModel):
     items: List[Triplet] = Field(..., description="List of triplets to process")
     input: Dict[str, Any] = Field(..., description="Additional input for the internal refine chain")
 
 
-class Refiner(Runnable[RefinerInput, Dict[str, Any]], ABC):
+class Refiner(Runnable[RefinerInput, Dict[str, Any]]):
     """Abstract class for refining data in batches with LLM chains"""
     
-    def __init__(self, llm: BaseChatModel, tokenizer=None, context_window_length: int = 8000):
-        self.llm = llm
+    def __init__(self, refine_chain: Runnable[RefinerInput, Dict[str, Any]], tokenizer=None, context_window_length: int = 8000):
+        self.refine_chain = refine_chain
         self.context_window_length = context_window_length
         if tokenizer is None:
             # default tokenizer if nothing provided
@@ -250,13 +246,6 @@ class Refiner(Runnable[RefinerInput, Dict[str, Any]], ABC):
             self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
         else:
             self.tokenizer = tokenizer
-        
-        self.chain = self._build_chain()
-    
-    @abstractmethod
-    def _build_chain(self) -> Runnable[Dict[str, Any], R]:
-        """Build the LLM chain used for refining"""
-        ...
     
     def _estimate_size_in_tokens(self, state: Dict[str, Any] | BaseModel | str) -> str:
         if isinstance(state, BaseModel):
@@ -300,7 +289,7 @@ class Refiner(Runnable[RefinerInput, Dict[str, Any]], ABC):
             
         return RefinerInput(items=current_batch, input=current_state), updated_remaining
     
-    async def ainvoke(self, refiner_input: RefinerInput, config: Optional[Dict[str, Any]] = None) -> R:
+    async def ainvoke(self, refiner_input: RefinerInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Process items in batches based on context window limitations"""
         current_state = refiner_input.input
         remaining_items = refiner_input.items.copy()
@@ -317,7 +306,7 @@ class Refiner(Runnable[RefinerInput, Dict[str, Any]], ABC):
                 
                 # Process batch
                 with measure_time(f"processing {batch_name} batch {batch_idx}"):
-                    current_state = await self.chain.ainvoke(current_batch, config=config)
+                    current_state = await self.refine_chain.ainvoke(current_batch, config=config)
                 
             except Exception as e:
                 # Handle exceptions
@@ -325,71 +314,11 @@ class Refiner(Runnable[RefinerInput, Dict[str, Any]], ABC):
                 logger.error(error_msg)
                 raise KGConstructionAgentException(error_msg)
         
-        return cast(R, current_state)
+        return current_state
     
-    def invoke(self, refiner_input: RefinerInput, config: Optional[Dict[str, Any]] = None) -> R:
+    def invoke(self, refiner_input: RefinerInput, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Synchronous version that runs the async method in an event loop"""
         return asyncio.run(self.ainvoke(refiner_input, config))
-
-
-class OntologyRefiner(Refiner[Dict[str, Any], Dict[str, List[str]]]):
-    """Refiner for constructing and refining an ontology from triplets"""
-    
-    def _build_chain(self) -> Runnable:
-        return build_ontology_refinement_chain(self.llm)
-    
-    def _prepare_batch_input(self, batch: Optional[List[Dict[str, Any]]], state: Dict[str, Any]) -> Dict[str, Any]:
-        if batch is None:
-            # Initial state preparation, return empty ontology
-            return state.get("current_ontology", {})
-            
-        formatted_items = "\n".join([
-            f"- Subject: {t['triplet'].subject}, Predicate: {t['triplet'].predicate}, Object: {t['triplet'].object}"
-            for t in batch
-        ])
-        
-        formatted_result = json.dumps(state, indent=2) if state else "Empty ontology"
-        
-        return {
-            "triplets": formatted_items,
-            "current_ontology": formatted_result
-        }
-
-
-class KnowledgeGraphRefiner(Refiner[Dict[str, Any], Dict[str, Any]]):
-    """Refiner for constructing and refining a knowledge graph from triplets and ontology"""
-    
-    def _build_chain(self) -> Runnable:
-        return build_kg_refining_chain(self.llm)
-    
-    def _prepare_batch_input(self, batch: Optional[List[Dict[str, Any]]], state: Dict[str, Any]) -> Dict[str, Any]:
-        # Extract ontology from state
-        ontology = state.get("ontology", {})
-        
-        if batch is None:
-            # Initial state preparation
-            return {
-                "ontology": ontology,
-                "entities": state.get("entities", []),
-                "relationships": state.get("relationships", [])
-            }
-            
-        formatted_items = "\n".join([
-            f"- Subject: {t['triplet'].subject}, Predicate: {t['triplet'].predicate}, Object: {t['triplet'].object}"
-            for t in batch
-        ])
-        
-        formatted_ontology = json.dumps(ontology, indent=2) if ontology else "Empty ontology"
-        
-        formatted_kg = "Empty knowledge graph"
-        if state.get("entities"):
-            formatted_kg = json.dumps(state, indent=2)
-        
-        return {
-            "triplets": formatted_items,
-            "current_ontology": formatted_ontology,
-            "current_kg": formatted_kg
-        }
 
 
 class KGConstructionAgent:
@@ -406,7 +335,7 @@ class KGConstructionAgent:
             self.tokenizer = tokenizer
 
 
-    async def triplets_mining(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
+    async def triplets_mining(self, state: KGMiningWorkflowState, config: Optional[Dict[str, Any]] = None) -> KGMiningWorkflowState:
         # 1. Order chunks by document_id and order_id
         chunks = sorted(state.chunks, key=lambda x: (x.document_id, x.order_id))
         
@@ -442,7 +371,7 @@ class KGConstructionAgent:
             }
             inputs.append(input_dict)
         
-        results = await chain.abatch(inputs, return_exceptions=True)
+        results = await chain.abatch(inputs, return_exceptions=True, config=config)
         
         # 5. Handle exceptions
         valid_results = []
@@ -471,16 +400,19 @@ class KGConstructionAgent:
             knowledge_graph=state.knowledge_graph
         )
     
-    async def ontology_refining(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
+    async def ontology_refining(self, state: KGMiningWorkflowState, config: Optional[Dict[str, Any]] = None) -> KGMiningWorkflowState:
         # Check for empty triplets
         if not state.triplets:
             logger.error("No triplets found in state, cannot construct ontology")
             raise KGConstructionAgentException("Cannot construct ontology from empty triplets")
         
-        # Use the OntologyRefiner
-        refiner = OntologyRefiner(self.llm, self.tokenizer, self.context_window_length)
+        refiner = Refiner(
+            refine_chain=build_ontology_refinement_chain(self.llm), 
+            tokenizer=self.tokenizer, 
+            context_window_length=self.context_window_length
+        )
         refiner_input = RefinerInput(items=state.triplets, input={"current_ontology": state.ontology})
-        current_ontology = await refiner.ainvoke(refiner_input)
+        current_ontology = await refiner.ainvoke(input=refiner_input, config=config)
         
         # Return updated state with the refined ontology
         return KGMiningWorkflowState(
@@ -490,7 +422,7 @@ class KGConstructionAgent:
             knowledge_graph=state.knowledge_graph
         )
 
-    async def kg_refining(self, state: KGMiningWorkflowState) -> KGMiningWorkflowState:
+    async def kg_refining(self, state: KGMiningWorkflowState, config: Optional[Dict[str, Any]] = None) -> KGMiningWorkflowState:
         # Check for empty triplets or ontology
         if not state.triplets:
             logger.error("No triplets found in state, cannot build knowledge graph")
@@ -500,8 +432,11 @@ class KGConstructionAgent:
             logger.error("No ontology found in state, cannot build knowledge graph")
             raise KGConstructionAgentException("Cannot build knowledge graph without ontology")
         
-        # Use the KnowledgeGraphRefiner with both triplets and ontology as inputs
-        refiner = KnowledgeGraphRefiner(self.llm, self.tokenizer, self.context_window_length)
+        refiner = Refiner(
+            refine_chain=build_kg_refining_chain(self.llm), 
+            tokenizer=self.tokenizer, 
+            context_window_length=self.context_window_length
+        )
         refiner_input = RefinerInput(
             items=state.triplets,
             input={
@@ -510,7 +445,7 @@ class KGConstructionAgent:
                 "relationships": state.knowledge_graph.get("relationships", [])
             }
         )
-        current_kg = await refiner.ainvoke(refiner_input)
+        current_kg = await refiner.ainvoke(input=refiner_input, config=config)
         
         # Return updated state with the refined knowledge graph
         return KGMiningWorkflowState(
