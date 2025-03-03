@@ -67,7 +67,7 @@ class KGConstructionAgent:
             raise KGConstructionAgentException("Cannot construct ontology from empty triplets")
         
         # Check cache first
-        cached_ontology = self.cache_manager.get(state.triplets, OntologyStructure, prefix="ontology")
+        cached_ontology = None #self.cache_manager.get(state.triplets, OntologyStructure, prefix="ontology")
         if cached_ontology and not state.no_cache:
             logger.info(f"Using cached ontology refining result")
             return state.model_copy(update={"ontology": cached_ontology})
@@ -83,7 +83,7 @@ class KGConstructionAgent:
         logger.info(f"Finished refining ontology. Found {len(current_ontology.nodes)} nodes and {len(current_ontology.relations)} relations")
         
         # Cache the result
-        self.cache_manager.put(state.triplets, current_ontology, prefix="ontology")
+        # self.cache_manager.put(state.triplets, current_ontology, prefix="ontology")
         
         return state.model_copy(update={"ontology": current_ontology})
 
@@ -101,7 +101,7 @@ class KGConstructionAgent:
         
         # Check cache first - use both triplets and ontology as key
         cache_key = {"triplets": state.triplets, "ontology": state.ontology}
-        cached_graph = self.cache_manager.get(cache_key, KgStructure, prefix="kg")
+        cached_graph = None #self.cache_manager.get(cache_key, KgStructure, prefix="kg")
         if cached_graph and not state.no_cache:
             logger.info(f"Using cached knowledge graph refining result")
             return state.model_copy(update={"knowledge_graph": cached_graph})
@@ -132,7 +132,7 @@ class KGConstructionAgent:
         logger.info(f"Finished refining knowledge graph. Found {len(current_kg.kg_nodes)} nodes and {len(current_kg.kg_triplets)} triplets")
         
         # Cache the result
-        self.cache_manager.put(cache_key, current_kg, prefix="kg")
+        # self.cache_manager.put(cache_key, current_kg, prefix="kg")
         
         return state.model_copy(update={"knowledge_graph": current_kg})
 
