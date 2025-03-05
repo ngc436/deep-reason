@@ -12,7 +12,7 @@ from deep_reason.envs import OPENAI_API_BASE, OPENAI_API_KEY
 from deep_reason.schemes import Chunk, OntologyStructure, Triplet
 from deep_reason.utils import VLLMChatOpenAI
 from deep_reason.kg_agent.schemes import (
-    AggregationInput, KGMiningWorkflowState, KGMiningResult, KgStructure, TripletList
+    AggregationInput, KGMiningWorkflowState, KGMiningResult, TripletList
 )
 from deep_reason.kg_agent.utils import KGConstructionAgentException, load_obliqa_dataset, CacheManager
 from deep_reason.kg_agent.chains import (
@@ -38,6 +38,9 @@ class KGConstructionAgent:
         
         # Create a single cache manager instance
         self.cache_manager = CacheManager(cache_dir=cache_dir)
+
+    async def _terms_mining(self, state: KGMiningWorkflowState, config: Optional[Dict[str, Any]] = None) -> KGMiningWorkflowState:
+        raise NotImplementedError("Terms mining is not implemented yet")
 
     async def _triplets_mining(self, state: KGMiningWorkflowState, config: Optional[Dict[str, Any]] = None) -> KGMiningWorkflowState:
         logger.info(f"Mining triplets for {len(state.chunks)} chunks")
@@ -138,7 +141,8 @@ class KGConstructionAgent:
 
     def build_wf(self) -> Runnable[KGMiningWorkflowState, Dict[str, Any]]:
         wf = StateGraph(KGMiningWorkflowState)
-        
+
+        # wf.add_node("terms_mining", self._terms_mining)
         wf.add_node("triplets_mining", self._triplets_mining)
         wf.add_node("ontology_refining", self._ontology_refining)
         wf.add_node("kg_refining", self._kg_refining)
@@ -235,6 +239,8 @@ def main():
     )
 
     chunks = load_obliqa_dataset(obliqa_dir="datasets/ObliQA/StructuredRegulatoryDocuments")
+
+    print(len(chunks))
 
     asyncio.run(run_kg_mining(llm, chunks[:10]))
 

@@ -70,7 +70,7 @@ class KGMiningWorkflowState(BaseModel):
     triplets: Optional[List[Triplet]] = None
     ontology: Optional[OntologyStructure] = None
     knowledge_graph: Optional[KgStructure] = None
-
+    terms: Optional[List[str]] = None
 
 class AggregationInput(BaseModel):
     items: List[Triplet] = Field(..., description="List of triplets to process")

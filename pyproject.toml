@@ -7,9 +7,14 @@ authors = ["name <email>"]
 [tool.poetry.dependencies]
 python = ">=3.12,<3.13"
 chromadb = "^0.6.3"
-langgraph = "^0.1.14"
-ttn-gpt-researcher = {git = "https://github.com/Industrial-AI-Research-Lab/ttn-gpt-researcher.git", branch = "main"}
+langgraph = "^0.3.2"
 pandas = "^2.2.3"
 vllm = "^0.7.3"
 click = "^8.1.8"
 tiktoken = "^0.9.0"
+networkx = "^3.4.2"
+langchain-neo4j = "^0.4.0"
+pydantic = "^2.7.0"
+langchain-core = "^0.3.8"
+langchain-experimental = "^0.3.4"
+langchain-openai = "^0.2.0"
