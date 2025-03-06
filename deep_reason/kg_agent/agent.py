@@ -1,7 +1,7 @@
 import logging
 import os
 import asyncio
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.runnables import Runnable
@@ -9,7 +9,7 @@ from langgraph.graph import StateGraph, START, END
 from transformers import PreTrainedTokenizerBase
 
 from deep_reason.envs import OPENAI_API_BASE, OPENAI_API_KEY
-from deep_reason.schemes import Chunk, OntologyStructure, Triplet
+from deep_reason.schemes import Chunk
 from deep_reason.utils import VLLMChatOpenAI
 from deep_reason.kg_agent.schemes import (
     AggregationInput, KGMiningWorkflowState, KGMiningResult, TripletList
