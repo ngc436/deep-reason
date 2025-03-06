@@ -925,6 +925,47 @@ files = [
 ]
 
 [[package]]
+name = "elastic-transport"
+version = "8.17.0"
+description = "Transport classes and utilities shared among Python Elastic client libraries"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "elastic_transport-8.17.0-py3-none-any.whl", hash = "sha256:59f553300866750e67a38828fede000576562a0e66930c641adb75249e0c95af"},
+    {file = "elastic_transport-8.17.0.tar.gz", hash = "sha256:e755f38f99fa6ec5456e236b8e58f0eb18873ac8fe710f74b91a16dd562de2a5"},
+]
+
+[package.dependencies]
+certifi = "*"
+urllib3 = ">=1.26.2,<3"
+
+[package.extras]
+develop = ["aiohttp", "furo", "httpcore (<1.0.6)", "httpx", "opentelemetry-api", "opentelemetry-sdk", "orjson", "pytest", "pytest-asyncio", "pytest-cov", "pytest-httpserver", "pytest-mock", "requests", "respx", "sphinx (>2)", "sphinx-autodoc-typehints", "trustme"]
+
+[[package]]
+name = "elasticsearch"
+version = "8.17.2"
+description = "Python client for Elasticsearch"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "elasticsearch-8.17.2-py3-none-any.whl", hash = "sha256:2d058dcddd8f2686cd431a916cdf983f9fb7d211d902834f564ab7df05ba6478"},
+    {file = "elasticsearch-8.17.2.tar.gz", hash = "sha256:ff7f1db8aeefd87ceba4edce3aa4070994582e6cf029d2e67b74e66d634509db"},
+]
+
+[package.dependencies]
+elastic-transport = ">=8.15.1,<9"
+
+[package.extras]
+async = ["aiohttp (>=3,<4)"]
+dev = ["aiohttp", "black", "build", "coverage", "isort", "jinja2", "mapbox-vector-tile", "nox", "numpy", "orjson", "pandas", "pyarrow", "pytest", "pytest-asyncio", "pytest-cov", "python-dateutil", "pyyaml (>=5.4)", "requests (>=2,<3)", "simsimd", "twine", "unasync"]
+docs = ["sphinx", "sphinx-autodoc-typehints", "sphinx-rtd-theme (>=2.0)"]
+orjson = ["orjson (>=3)"]
+pyarrow = ["pyarrow (>=1)"]
+requests = ["requests (>=2.4.0,!=2.32.2,<3.0.0)"]
+vectorstore-mmr = ["numpy (>=1)", "simsimd (>=3)"]
+
+[[package]]
 name = "email-validator"
 version = "2.2.0"
 description = "A robust email address syntax and deliverability validation library."
@@ -6170,4 +6211,4 @@ cffi = ["cffi (>=1.11)"]
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.12,<3.13"
-content-hash = "7e27c41bb1096e2a7dc5504b98cdf157637042c97d319a1ffee1b5e034ca5207"
+content-hash = "23b6b9c01fa93f1d569e84047eef4d6bbe2bf3bfbda23169ddeb0a8f54718937"

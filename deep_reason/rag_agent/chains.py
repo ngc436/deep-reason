@@ -1,84 +1,220 @@
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.runnables import Runnable
+from langchain_core.runnables import Runnable, RunnableLambda, RunnableParallel, RunnablePassthrough
 from typing import Any, Dict, List, Optional
 import logging
+import asyncio
+from pydantic import BaseModel, Field
 
 from deep_reason.schemes import Chunk
 from deep_reason.utils import build_chain
 
 logger = logging.getLogger(__name__)
 
+# TODO: Make implementation of RAG agent the same way as for kg_agent
+# rag agent should have a separate chain for encoding loading data to elasticsearch
+# retrieval chain should find the most relevant chunks for the query 
+# and then pass them to the LLM for answering the query
 
-class RAGAgent(Runnable):
-    """Process chunks to extract knowledge triplets using sliding window context approach."""
+# RAG agent implementation based on kg_agent pattern
+# Implementation includes encoding/loading data to elasticsearch and retrieval chain
+
+class RAGDocumentResponse(BaseModel):
+    """Response format for document search and answer generation"""
+    answer: str = Field(description="The answer to the query based on the documents")
+    context_chunks: List[str] = Field(description="The list of chunks that were used to answer the query")
+    reasoning: str = Field(description="The reasoning behind the answer")
+
+
+class ElasticsearchDocumentEncoder(Runnable):
+    """Encodes and loads documents into Elasticsearch for retrieval."""
     
-    def __init__(self, llm: BaseChatModel):
-        self.llm = llm
-    
-    async def ainvoke(self, questions: List[str], passages: List[str], config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """Takes questions and answer on them using passages as context.
+    def __init__(self, elasticsearch_index: str, elasticsearch_url: Optional[str] = None):
+        """Initialize the encoder with Elasticsearch connection details.
         
         Args:
-            questions: List of questions to answer
-            passages: List of passages to use as context
-            config: Optional configuration for the chain
+            elasticsearch_index: The name of the Elasticsearch index to use
+            elasticsearch_url: The URL of the Elasticsearch instance
+        """
+        self.elasticsearch_index = elasticsearch_index
+        self.elasticsearch_url = elasticsearch_url or "http://localhost:9200"
+        # Import here to make elasticsearch an optional dependency
+        from elasticsearch import Elasticsearch
+        self.es_client = Elasticsearch(self.elasticsearch_url)
+        
+        # Create index if it doesn't exist
+        if not self.es_client.indices.exists(index=self.elasticsearch_index):
+            self.es_client.indices.create(
+                index=self.elasticsearch_index,
+                body={
+                    "mappings": {
+                        "properties": {
+                            "text": {"type": "text"},
+                            "chapter_name": {"type": "keyword"},
+                            "document_id": {"type": "integer"},
+                            "order_id": {"type": "integer"},
+                            "embedding": {"type": "dense_vector", "dims": 1536}  # Adjust dims based on your embedding model
+                        }
+                    }
+                }
+            )
+    
+    async def ainvoke(self, chunks: List[Chunk], config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Encode and load chunks into Elasticsearch asynchronously.
+        
+        Args:
+            chunks: List of chunks to encode and load
+            config: Optional configuration for the encoding process
             
         Returns:
-            List of dictionaries containing question and answer information
+            Dictionary with the result of the operation
         """
-        logger.info(f"Sorting chunks by document_id and order_id for {len(chunks)} chunks")
-        # 1. Order chunks by document_id and order_id
-        chunks = sorted(chunks, key=lambda x: (x.document_id, x.order_id))
+        logger.info(f"Encoding and loading {len(chunks)} chunks into Elasticsearch")
         
-        # 2. Create chunk tuples with sliding window approach
-        chunk_tuples = []
-        logger.info(f"Creating chunks tuples by document_id and order_id for {len(chunks)} chunks")
-        # Group chunks by document_id
-        for _, doc_chunks in groupby(chunks, key=lambda x: x.document_id):
-            doc_chunks_list = list(doc_chunks)
+        # Import transformers here to make it an optional dependency
+        from sentence_transformers import SentenceTransformer
+        
+        # Load the model for encoding
+        model = SentenceTransformer('all-MiniLM-L6-v2')  # Can be changed to any sentence-transformer model
+        
+        # Process chunks in batches
+        batch_size = 32  # Adjust based on your hardware
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i+batch_size]
             
-            for i, chunk in enumerate(doc_chunks_list):
-                left_context = None if i == 0 else doc_chunks_list[i-1]
-                right_context = None if i == len(doc_chunks_list) - 1 else doc_chunks_list[i+1]
-                
-                chunk_tuples.append(ChunkTuple(
-                    current_chunk=chunk,
-                    left_context=left_context,
-                    right_context=right_context
-                ))
+            # Generate embeddings for the batch
+            texts = [chunk.text for chunk in batch]
+            embeddings = model.encode(texts)
+            
+            # Prepare bulk operation
+            operations = []
+            for chunk, embedding in zip(batch, embeddings):
+                operations.extend([
+                    {"index": {"_index": self.elasticsearch_index}},
+                    {
+                        "text": chunk.text,
+                        "chapter_name": chunk.chapter_name,
+                        "document_id": chunk.document_id,
+                        "order_id": chunk.order_id,
+                        "embedding": embedding.tolist()
+                    }
+                ])
+            
+            # Execute bulk operation
+            if operations:
+                self.es_client.bulk(operations)
         
-        # 3. Build the triplet mining chain
-        chain = build_triplets_mining_chain(self.llm)
+        logger.info(f"Successfully loaded {len(chunks)} chunks into Elasticsearch")
+        return {"status": "success", "chunks_loaded": len(chunks)}
+    
+    def invoke(self, chunks: List[Chunk], config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Synchronous version that runs the async method in an event loop."""
+        return asyncio.run(self.ainvoke(chunks, config))
+
+
+def build_retrieval_chain(llm: BaseChatModel, elasticsearch_index: str, elasticsearch_url: Optional[str] = None) -> Runnable:
+    """Build a chain for retrieving relevant chunks from Elasticsearch and answering queries.
+    
+    Args:
+        llm: The language model to use for answering
+        elasticsearch_index: The Elasticsearch index to search
+        elasticsearch_url: The URL of the Elasticsearch instance
         
-        # 4. Process chunk tuples using batch method
-        logger.info(f"Forming batches for {len(chunk_tuples)} chunk tuples")
-        inputs = []
-        for ct in chunk_tuples:
-            input_dict = {
-                "current_chunk": ct.current_chunk.text,
-                "left_context_prefix": "Left context: " if ct.left_context else "No left context available.",
-                "left_context": ct.left_context.text if ct.left_context else "",
-                "right_context_prefix": "Right context: " if ct.right_context else "No right context available.",
-                "right_context": ct.right_context.text if ct.right_context else ""
+    Returns:
+        A runnable chain that retrieves and answers queries
+    """
+    from elasticsearch import Elasticsearch
+    from sentence_transformers import SentenceTransformer
+    
+    es_client = Elasticsearch(elasticsearch_url or "http://localhost:9200")
+    embedding_model = SentenceTransformer('all-MiniLM-L6-v2')  # Can be changed to any sentence-transformer model
+    
+    system_template = """You are a helpful assistant that accurately answers questions based on the provided context. 
+    If the answer cannot be found in the context, say "I don't know" rather than making up an answer.
+    Your goal is to provide accurate, concise, and helpful answers based solely on the information provided in the context.
+    {response_format_description}"""
+
+    human_template = """Answer the following question using only the context below:
+    
+Question: {query}
+
+Context:
+{context}
+
+Answer the question based only on the provided context, citing relevant parts when appropriate. If the question cannot be
+ answered from the context, just say "I don't know based on the provided information."
+"""
+    
+    from langchain_core.output_parsers import PydanticOutputParser
+    parser = PydanticOutputParser(pydantic_object=RAGDocumentResponse)
+    
+    qa_chain = build_chain(llm, system_template, human_template, parser)
+    
+    def _retrieve_context(query: str) -> Dict[str, Any]:
+        """Retrieve the most relevant chunks from Elasticsearch for the query.
+        
+        Args:
+            query: The query to search for
+            
+        Returns:
+            Dictionary with the query and retrieved context
+        """
+        # Encode the query
+        query_embedding = embedding_model.encode(query)
+        
+        # Search Elasticsearch for similar documents
+        results = es_client.search(
+            index=elasticsearch_index,
+            body={
+                "size": 5,  # Get top 5 most relevant chunks
+                "query": {
+                    "script_score": {
+                        "query": {"match_all": {}},
+                        "script": {
+                            "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                            "params": {"query_vector": query_embedding.tolist()}
+                        }
+                    }
+                }
             }
-            inputs.append(input_dict)
+        )
         
-        logger.info(f"Processing {len(inputs)} inputs")
-        results = await chain.abatch(inputs, return_exceptions=True, config=config)
+        # Extract the chunks from the results
+        chunks = []
+        for hit in results["hits"]["hits"]:
+            chunks.append(hit["_source"]["text"])
         
-        # 5. Handle exceptions
-        valid_results = []
-        for chunk_tuple, result in zip(chunk_tuples, results):
-            if isinstance(result, Exception):
-                logger.error(f"Error processing chunk {chunk_tuple.current_chunk.chapter_name}: {result}. Skipping chunk.")
-                continue
-            # Attach the chunk information to each result
-            for triplet in result.triplets:
-                valid_results.append(
-                    (chunk_tuple.current_chunk.document_id, chunk_tuple.current_chunk.order_id, triplet)
-                )
+        context = "\n\n".join(chunks)
         
-        # 6. Sort triplets by document and then chunk order
-        valid_results = [triplet for _, _, triplet in sorted(valid_results, key=lambda x: (x[0], x[1]))]
+        return {
+            "query": query,
+            "context": context,
+            "retrieved_chunks": chunks
+        }
+    
+    def _process_result(result: RAGDocumentResponse, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Process the result of the QA chain.
         
-        return valid_results
+        Args:
+            result: The result of the QA chain
+            inputs: The inputs to the QA chain
+            
+        Returns:
+            Dictionary with the answer and retrieved chunks
+        """
+        return {
+            "answer": result.answer,
+            "context_chunks": inputs["retrieved_chunks"],
+            "reasoning": result.reasoning
+        }
+    
+    # Complete chain: retrieve context -> pass to QA chain -> process result
+    retrieval_chain = (
+        RunnableLambda(_retrieve_context)
+        | RunnableParallel(
+            result=qa_chain,
+            inputs=RunnablePassthrough()
+        )
+        | RunnableLambda(lambda x: _process_result(x["result"], x["inputs"]))
+    )
+    
+    return retrieval_chain
