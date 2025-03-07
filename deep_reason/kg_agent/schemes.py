@@ -14,11 +14,9 @@ class ChunkTuple:
 
 # Raw triplets
 class Triplet(BaseModel):
-    triplet_id: str = Field(description="Unique identifier for the triplet")
-    chunk_id: str = Field(description="Unique identifier for the chunk where the triplet was found")
-    subject: str = Field(description="The entity performing the action or having the property considering the chunk")
-    predicate: str = Field(description="The relationship or action considering the chunk")
-    object: str = Field(description="The entity receiving the action or the value of the property considering the chunk")
+    subject: str = Field(description="The normalized naming of the entity performing the action or having the property considering the chunk")
+    predicate: str = Field(description="The normalized naming of the relationship or action considering the chunk")
+    object: str = Field(description="The normalized naming of the entity receiving the action or the value of the property considering the chunk")
 
 class TripletList(BaseModel):
     triplets: List[Triplet] = Field(description="List of knowledge triplets extracted from the text")

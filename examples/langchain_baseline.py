@@ -13,6 +13,7 @@ from typing import List
 import asyncio
 from langchain_core.runnables import RunnableConfig
 from deep_reason.kg_agent.utils import Chunk
+import openai
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ url = os.environ.get("MEMGRAPH_URI", "bolt://localhost:7687")
 username = os.environ.get("MEMGRAPH_USERNAME", "")
 password = os.environ.get("MEMGRAPH_PASSWORD", "")
 
-def merge_chunks(chunks: List[Chunk], chunks_merge_window=10, char_len_limit=20000):
+def merge_chunks(chunks: List[Chunk], chunks_merge_window=100, char_len_limit=20000):
     # Group chunks by document_id
     document_groups = {}
     for chunk in chunks:
@@ -57,7 +58,6 @@ def merge_chunks(chunks: List[Chunk], chunks_merge_window=10, char_len_limit=200
                 if current_chunks:  # Only create a merged chunk if we have chunks to merge
                     # Combine text from all chunks in this group
                     combined_text = " ".join(chunk.text for chunk in current_chunks)
-                    print(len(combined_text))
                     
                     # Create merged chunk
                     merged_chunk = Chunk(
@@ -103,76 +103,212 @@ def merge_chunks(chunks: List[Chunk], chunks_merge_window=10, char_len_limit=200
     
     return merged_chunks
 
-async def main():
+# New function to process documents in smaller batches to avoid context limit
+async def process_documents_in_batches(llm, documents, batch_size=5):
+    """
+    Process documents in smaller batches to avoid context length errors.
+    """
+    graph_documents = []
+    llm_transformer = LLMGraphTransformer(llm=llm)
+    
+    for i in range(0, len(documents), batch_size):
+        batch = documents[i:i+batch_size]
+        print(f"Processing batch {i//batch_size + 1}/{(len(documents) + batch_size - 1)//batch_size}")
+        try:
+            batch_results = await llm_transformer.aconvert_to_graph_documents(
+                batch, 
+                config=RunnableConfig(max_concurrency=20)
+            )
+            graph_documents.extend(batch_results)
+        except openai.BadRequestError as e:
+            if "maximum context length" in str(e):
+                print(f"Context length error in batch {i//batch_size + 1}. Reducing batch size.")
+                # Try processing with an even smaller batch size
+                for single_doc in batch:
+                    try:
+                        single_result = await llm_transformer.aconvert_to_graph_documents(
+                            [single_doc], 
+                            config=RunnableConfig(max_concurrency=1)
+                        )
+                        graph_documents.extend(single_result)
+                    except Exception as inner_e:
+                        print(f"Error processing document: {inner_e}")
+                        continue
+            else:
+                print(f"Error processing batch: {e}")
+                continue
+    
+    return graph_documents
 
+# Function to process queries in batches
+async def process_queries_in_batches(chain, inputs, batch_size=10):
+    """
+    Process queries in smaller batches to avoid context length errors.
+    """
+    all_responses = []
+    
+    for i in range(0, len(inputs), batch_size):
+        batch = inputs[i:i+batch_size]
+        print(f"Processing query batch {i//batch_size + 1}/{(len(inputs) + batch_size - 1)//batch_size}")
+        try:
+            batch_responses = await chain.abatch(
+                batch, config=RunnableConfig(max_concurrency=20)
+            )
+            all_responses.extend(batch_responses)
+        except Exception as e:
+            print(f"Error processing query batch: {e}")
+            # Try processing one by one
+            for query in batch:
+                try:
+                    single_response = await chain.ainvoke(query)
+                    all_responses.append(single_response)
+                except Exception as inner_e:
+                    print(f"Error processing query: {inner_e}")
+                    all_responses.append({"error": str(inner_e)})
+    
+    return all_responses
+
+async def create_knowledge_graph(dataset_path="datasets/ObliQA/StructuredRegulatoryDocuments", llm=None, batch_size=5):
+    """
+    Creates a knowledge graph from the provided dataset.
+    
+    Args:
+        dataset_path: Path to the dataset directory
+        llm: The language model to use for creating the graph
+        batch_size: Number of documents to process at once
+        
+    Returns:
+        tuple: (graph, graph_documents) - The created graph and the processed graph documents
+    """
+    # Initialize graph
     graph = MemgraphGraph(
         url=url, username=username, password=password, refresh_schema=False
     )
-        
-    # text = """
-    # Application\nThis Rulebook shall apply to Captive Insurers subject to alternative provision in these Rules or where the context otherwise requires.
-    # """
-
- 
-    chunks = load_obliqa_dataset(obliqa_dir="datasets/ObliQA/StructuredRegulatoryDocuments")
+    
+    # Load and process chunks
+    chunks = load_obliqa_dataset(obliqa_dir=dataset_path)
     chunks = merge_chunks(chunks)
-    print(len(chunks))
-
+    print(f"Total chunks after merging: {len(chunks)}")
+    
+    # Convert chunks to documents
     documents = [Document(page_content=chunk.text) for chunk in chunks]
-    # print(documents)
-
-    llm = VLLMChatOpenAI(
-            model="/model",
-            base_url=os.environ[OPENAI_API_BASE],
-            api_key=os.environ[OPENAI_API_KEY],
-            temperature=0.3,
-            max_tokens=6096
-        )
-
-    llm_transformer = LLMGraphTransformer(llm=llm)
-    graph_documents = await llm_transformer.aconvert_to_graph_documents(documents, 
-                                                                        config=RunnableConfig(max_concurrency=100))
-    # print(f"Graph:{graph_documents}")
-
+    
+    # Process documents in smaller batches
+    graph_documents = await process_documents_in_batches(llm, documents, batch_size=batch_size)
+    print(f"Processed {len(graph_documents)} graph documents")
+    
+    # Reset graph and add documents
     graph.query("STORAGE MODE IN_MEMORY_ANALYTICAL")
     graph.query("DROP GRAPH")
     graph.query("STORAGE MODE IN_MEMORY_TRANSACTIONAL")
-
-
+    
     graph.add_graph_documents(graph_documents, include_source=True)
-    # graph.refresh_schema()
-    # print(graph.get_schema)
+    
+    return graph, graph_documents
 
-    # query 
+async def query_knowledge_graph(graph, llm, questions_path="datasets/ObliQA/ObliQA_train.json", 
+                              output_path="datasets/gen_results/qwen_72b/ObliQA_train_graph_answers_langchain.json",
+                              batch_size=10):
+    """
+    Queries the knowledge graph with questions from the provided file.
+    
+    Args:
+        graph: The Memgraph graph to query
+        llm: The language model to use for querying
+        questions_path: Path to the questions file
+        output_path: Path to save the results
+        batch_size: Number of questions to process at once
+        
+    Returns:
+        DataFrame: The questions with answers
+    """
+    if graph is None:
+        graph = MemgraphGraph(
+            url=url, username=username, password=password, refresh_schema=False
+        )
+    # Create query chain
     chain = MemgraphQAChain.from_llm(
         llm,
         graph=graph,
         model_name="qwen2.5-72b-instruct",
         allow_dangerous_requests=True,
-        # return_direct=True,
         return_intermediate_steps=True,
-        # return_source_documents=True
     )
-
-    # run all quesitons from the dataset
-
-    questions_df = pd.read_json("datasets/ObliQA/ObliQA_train.json")
+    
+    # Load questions
+    questions_df = pd.read_json(questions_path)
     inputs = []
     questions_subset = questions_df
+    
     for ct in questions_subset['Question'].tolist():
         input_dict = {
             "query": ct,
         }
         inputs.append(input_dict)
-    response = await chain.abatch(
-        inputs, config=RunnableConfig(max_concurrency=250)
+    
+    # Process queries in batches
+    responses = await process_queries_in_batches(chain, inputs, batch_size=batch_size)
+    
+    # Process and display results
+    for i, response in enumerate(responses):
+        print(f"Question {i+1}: {inputs[i]['query']}")
+        if isinstance(response, dict) and "error" in response:
+            print(f"Error: {response['error']}")
+        else:
+            print(f"Answer: {response}")
+        print("-" * 50)
+    
+    # Save results to JSON
+    try:
+        # Extract results while handling potential errors
+        results = []
+        for response in responses:
+            if isinstance(response, dict):
+                if "error" in response:
+                    results.append({"result": f"Error: {response['error']}"})
+                else:
+                    results.append({"result": response.get("result", "No result available")})
+            else:
+                results.append({"result": "Invalid response format"})
+        
+        questions_subset['answer'] = [r["result"] for r in results]
+        questions_subset.to_json(output_path, orient="records", lines=True)
+        print(f"Results saved successfully to {output_path}")
+    except Exception as e:
+        print(f"Error saving results: {e}")
+        
+    return questions_subset
+
+async def main():
+    """
+    Main function that creates and queries the knowledge graph.
+    """
+    graph = None
+
+    # Initialize LLM
+    llm = VLLMChatOpenAI(
+        model="/model",
+        base_url=os.environ[OPENAI_API_BASE],
+        api_key=os.environ[OPENAI_API_KEY],
+        temperature=0.3,
+        max_tokens=2048  # Reduced from 6096 to leave more room for input context
     )
-    print(response)
-    questions_subset['answer'] = [i['result'] for i in response]
-    # questions_subset['intermediate_steps'] = [i['intermediate_steps'] for i in response]
-    # questions_df['source_documents'] = [i['source_documents'] for i in response]
-    questions_subset.to_json("datasets/gen_results/qwen_72b/ObliQA_train_graph_answers_langchain.json", 
-                    orient="records", lines=True)
+
+    # Create knowledge graph
+    # graph, _ = await create_knowledge_graph(
+    #     dataset_path="datasets/ObliQA/StructuredRegulatoryDocuments",
+    #     llm=llm,
+    #     batch_size=5
+    # )
+    
+    # Query knowledge graph
+    results = await query_knowledge_graph(
+        graph, 
+        llm,
+        questions_path="datasets/ObliQA/ObliQA_train.json",
+        output_path="datasets/gen_results/qwen_72b/ObliQA_train_graph_answers_langchain.json",
+        batch_size=10
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
