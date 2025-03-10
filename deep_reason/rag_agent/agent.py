@@ -3,7 +3,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.runnables import Runnable
+
 
 from deep_reason.schemes import Chunk
 from deep_reason.rag_agent.chains import ElasticsearchDocumentEncoder, build_retrieval_chain

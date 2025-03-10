@@ -14,9 +14,32 @@ import asyncio
 from langchain_core.runnables import RunnableConfig
 from deep_reason.kg_agent.utils import Chunk
 import openai
+from langchain_core.prompts.prompt import PromptTemplate
+import click
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+CYPHER_GENERATION_TEMPLATE = """
+Task:Generate Cypher statement to query a graph database.
+Schema of the graph: 
+{schema}
+Instructions:
+- Use only the provided relationship types and properties in the schema. Pay attantion to the connection.
+- Do not use any other relationship types or properties that are not provided.
+- Find the most relevant nodes and relationship to answer the question.
+- Try to make cypher statement as simple as possible to extract more data as graph can be large and sparse
+Note: Do not include any explanations or apologies in your responses or additional tags.
+Do not respond to any questions that might ask anything else than for you to construct a Cypher statement.
+Do not include any text except the generated Cypher statement.
+Examples: Here are a few examples of generated Cypher statements for particular questions:
+# How many people played in Top Gun?
+MATCH (m:Movie {{name:"Top Gun"}})<-[:ACTED_IN]-()
+RETURN count(*) AS numberOfActors
+
+The question is:
+{question}
+Generated Cypher statement:"""
 
 # Neo4j connection details
 # NEO4J_URI = "bolt://localhost:7687"
@@ -152,7 +175,7 @@ async def process_queries_in_batches(chain, inputs, batch_size=10):
         print(f"Processing query batch {i//batch_size + 1}/{(len(inputs) + batch_size - 1)//batch_size}")
         try:
             batch_responses = await chain.abatch(
-                batch, config=RunnableConfig(max_concurrency=20)
+                batch, config=RunnableConfig(max_concurrency=250)
             )
             all_responses.extend(batch_responses)
         except Exception as e:
@@ -186,7 +209,7 @@ async def create_knowledge_graph(dataset_path="datasets/ObliQA/StructuredRegulat
     )
     
     # Load and process chunks
-    chunks = load_obliqa_dataset(obliqa_dir=dataset_path)
+    chunks = load_obliqa_dataset(obliqa_dir=dataset_path, file_idx=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15])
     chunks = merge_chunks(chunks)
     print(f"Total chunks after merging: {len(chunks)}")
     
@@ -208,7 +231,7 @@ async def create_knowledge_graph(dataset_path="datasets/ObliQA/StructuredRegulat
 
 async def query_knowledge_graph(graph, llm, questions_path="datasets/ObliQA/ObliQA_train.json", 
                               output_path="datasets/gen_results/qwen_72b/ObliQA_train_graph_answers_langchain.json",
-                              batch_size=10):
+                              batch_size=50):
     """
     Queries the knowledge graph with questions from the provided file.
     
@@ -224,21 +247,27 @@ async def query_knowledge_graph(graph, llm, questions_path="datasets/ObliQA/Obli
     """
     if graph is None:
         graph = MemgraphGraph(
-            url=url, username=username, password=password, refresh_schema=False
+            url=url, username=username, password=password, refresh_schema=True
         )
+    else:
+        graph.refresh_schema()
+
+
     # Create query chain
     chain = MemgraphQAChain.from_llm(
         llm,
         graph=graph,
         model_name="qwen2.5-72b-instruct",
         allow_dangerous_requests=True,
+        cypher_prompt=PromptTemplate.from_template(CYPHER_GENERATION_TEMPLATE),
+        return_direct=True,
         return_intermediate_steps=True,
     )
     
     # Load questions
     questions_df = pd.read_json(questions_path)
     inputs = []
-    questions_subset = questions_df
+    questions_subset = questions_df.head(10)
     
     for ct in questions_subset['Question'].tolist():
         input_dict = {
@@ -279,35 +308,59 @@ async def query_knowledge_graph(graph, llm, questions_path="datasets/ObliQA/Obli
         
     return questions_subset
 
-async def main():
+@click.command()
+@click.option('--build-graph', is_flag=True, help='Whether to build the knowledge graph')
+@click.option('--dataset-to-graph-path', default="datasets/ObliQA/StructuredRegulatoryDocuments", 
+              help='Path to the dataset to create the graph')
+@click.option('--query-path', default="datasets/ObliQA/ObliQA_train_filtered.json", 
+              help='Path to JSON file with questions')
+@click.option('--output-path', default="datasets/gen_results/qwen_72b/ObliQA_train_graph_answers_langchain_sample_filtered.json", 
+              help='Path to save the results')
+@click.option('--model-params', default=None, 
+              help='JSON string with parameters for the VLLMChatOpenAI model')
+@click.option('--batch-size', default=50, type=int, 
+              help='Batch size to process data with model')
+async def main(build_graph, dataset_to_graph_path, query_path, output_path, model_params, batch_size):
     """
     Main function that creates and queries the knowledge graph.
     """
     graph = None
-
+    
+    # Parse model parameters if provided
+    model_config = {
+        "model": "/model",
+        "base_url": os.environ[OPENAI_API_BASE],
+        "api_key": os.environ[OPENAI_API_KEY],
+        "temperature": 0.3,
+        "max_tokens": 2048
+    }
+    
+    if model_params:
+        try:
+            import json
+            custom_params = json.loads(model_params)
+            model_config.update(custom_params)
+        except json.JSONDecodeError:
+            logger.error(f"Invalid JSON for model parameters: {model_params}")
+    
     # Initialize LLM
-    llm = VLLMChatOpenAI(
-        model="/model",
-        base_url=os.environ[OPENAI_API_BASE],
-        api_key=os.environ[OPENAI_API_KEY],
-        temperature=0.3,
-        max_tokens=2048  # Reduced from 6096 to leave more room for input context
-    )
+    llm = VLLMChatOpenAI(**model_config)
 
-    # Create knowledge graph
-    # graph, _ = await create_knowledge_graph(
-    #     dataset_path="datasets/ObliQA/StructuredRegulatoryDocuments",
-    #     llm=llm,
-    #     batch_size=5
-    # )
+    # Create knowledge graph if requested
+    if build_graph:
+        graph, _ = await create_knowledge_graph(
+            dataset_path=dataset_to_graph_path,
+            llm=llm,
+            batch_size=batch_size
+        )
     
     # Query knowledge graph
     results = await query_knowledge_graph(
         graph, 
         llm,
-        questions_path="datasets/ObliQA/ObliQA_train.json",
-        output_path="datasets/gen_results/qwen_72b/ObliQA_train_graph_answers_langchain.json",
-        batch_size=10
+        questions_path=query_path,
+        output_path=output_path,
+        batch_size=batch_size
     )
 
 if __name__ == "__main__":

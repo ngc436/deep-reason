@@ -1,14 +1,25 @@
+import os
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.runnables import Runnable, RunnableLambda, RunnableParallel, RunnablePassthrough
 from typing import Any, Dict, List, Optional
 import logging
 import asyncio
 from pydantic import BaseModel, Field
+from langchain_openai.embeddings import OpenAIEmbeddings
+from elasticsearch import Elasticsearch
 
 from deep_reason.schemes import Chunk
 from deep_reason.utils import build_chain
 
 logger = logging.getLogger(__name__)
+
+embedding_model = OpenAIEmbeddings(
+            model='/model',
+            openai_api_key=os.environ.get("VLLM_API_KEY", ""),
+            openai_api_base="http://10.32.2.11:{settings.vllm_openapi_embedding_port}/v1",
+            tiktoken_enabled=False,
+            check_embedding_ctx_length=False
+        )
 
 # TODO: Make implementation of RAG agent the same way as for kg_agent
 # rag agent should have a separate chain for encoding loading data to elasticsearch
@@ -38,7 +49,6 @@ class ElasticsearchDocumentEncoder(Runnable):
         self.elasticsearch_index = elasticsearch_index
         self.elasticsearch_url = elasticsearch_url or "http://localhost:9200"
         # Import here to make elasticsearch an optional dependency
-        from elasticsearch import Elasticsearch
         self.es_client = Elasticsearch(self.elasticsearch_url)
         
         # Create index if it doesn't exist
