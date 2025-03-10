@@ -46,6 +46,98 @@ Generated Cypher statement:"""
 # NEO4J_USERNAME = "neo4j"
 # NEO4J_PASSWORD = "password"  # Replace with your actual password
 
+def from_llm(
+    cls,
+    llm: Optional[BaseLanguageModel] = None,
+    *,
+    qa_prompt: Optional[BasePromptTemplate] = None,
+    cypher_prompt: Optional[BasePromptTemplate] = None,
+    cypher_llm: Optional[BaseLanguageModel] = None,
+    qa_llm: Optional[Union[BaseLanguageModel, Any]] = None,
+    qa_llm_kwargs: Optional[Dict[str, Any]] = None,
+    cypher_llm_kwargs: Optional[Dict[str, Any]] = None,
+    use_function_response: bool = False,
+    function_response_system: str = FUNCTION_RESPONSE_SYSTEM,
+    **kwargs: Any,
+) -> MemgraphQAChain:
+    """Initialize from LLM."""
+
+    if not cypher_llm and not llm:
+        raise ValueError("Either `llm` or `cypher_llm` parameters must be provided")
+    if not qa_llm and not llm:
+        raise ValueError("Either `llm` or `qa_llm` parameters must be provided")
+    if cypher_llm and qa_llm and llm:
+        raise ValueError(
+            "You can specify up to two of 'cypher_llm', 'qa_llm'"
+            ", and 'llm', but not all three simultaneously."
+        )
+    if cypher_prompt and cypher_llm_kwargs:
+        raise ValueError(
+            "Specifying cypher_prompt and cypher_llm_kwargs together is"
+            " not allowed. Please pass prompt via cypher_llm_kwargs."
+        )
+    if qa_prompt and qa_llm_kwargs:
+        raise ValueError(
+            "Specifying qa_prompt and qa_llm_kwargs together is"
+            " not allowed. Please pass prompt via qa_llm_kwargs."
+        )
+    use_qa_llm_kwargs = qa_llm_kwargs if qa_llm_kwargs is not None else {}
+    use_cypher_llm_kwargs = (
+        cypher_llm_kwargs if cypher_llm_kwargs is not None else {}
+    )
+    if "prompt" not in use_qa_llm_kwargs:
+        use_qa_llm_kwargs["prompt"] = (
+            qa_prompt if qa_prompt is not None else MEMGRAPH_QA_PROMPT
+        )
+    if "prompt" not in use_cypher_llm_kwargs:
+        use_cypher_llm_kwargs["prompt"] = (
+            cypher_prompt
+            if cypher_prompt is not None
+            else MEMGRAPH_GENERATION_PROMPT
+        )
+
+    qa_llm = qa_llm or llm
+    if use_function_response:
+        try:
+            qa_llm.bind_tools({})  # type: ignore[union-attr]
+            response_prompt = ChatPromptTemplate.from_messages(
+                [
+                    SystemMessage(content=function_response_system),
+                    HumanMessagePromptTemplate.from_template("{question}"),
+                    MessagesPlaceholder(variable_name="function_response"),
+                ]
+            )
+            qa_chain = response_prompt | qa_llm | StrOutputParser()  # type: ignore
+        except (NotImplementedError, AttributeError):
+            raise ValueError("Provided LLM does not support native tools/functions")
+    else:
+        qa_chain = use_qa_llm_kwargs["prompt"] | qa_llm | StrOutputParser()  # type: ignore
+
+    prompt = use_cypher_llm_kwargs["prompt"]
+    llm_to_use = cypher_llm if cypher_llm is not None else llm
+
+    if prompt is not None and llm_to_use is not None:
+        def _cypher_gen_print(x):
+            print('OUTPUT: ',x)
+            return x
+
+        cypher_generation_chain = prompt | llm_to_use | StrOutputParser() | RunnableLambda(_cypher_gen_print) # type: ignore[arg-type]
+    else:
+        raise ValueError(
+            "Missing required components for the cypher generation chain: "
+            "'prompt' or 'llm'"
+        )
+
+    graph_schema = kwargs["graph"].get_schema
+
+    return cls(
+        graph_schema=graph_schema,
+        qa_chain=qa_chain,
+        cypher_generation_chain=cypher_generation_chain,
+        use_function_response=use_function_response,
+        **kwargs,
+    )
+
 url = os.environ.get("MEMGRAPH_URI", "bolt://localhost:7687")
 username = os.environ.get("MEMGRAPH_USERNAME", "")
 password = os.environ.get("MEMGRAPH_PASSWORD", "")
@@ -309,7 +401,7 @@ async def query_knowledge_graph(graph, llm, questions_path="datasets/ObliQA/Obli
     return questions_subset
 
 @click.command()
-@click.option('--build-graph', is_flag=True, help='Whether to build the knowledge graph')
+@click.option('--build-graph', is_flag=True, help='Whether to build the knowledge graph', default=False)
 @click.option('--dataset-to-graph-path', default="datasets/ObliQA/StructuredRegulatoryDocuments", 
               help='Path to the dataset to create the graph')
 @click.option('--query-path', default="datasets/ObliQA/ObliQA_train_filtered.json", 
@@ -320,12 +412,12 @@ async def query_knowledge_graph(graph, llm, questions_path="datasets/ObliQA/Obli
               help='JSON string with parameters for the VLLMChatOpenAI model')
 @click.option('--batch-size', default=50, type=int, 
               help='Batch size to process data with model')
-async def main(build_graph, dataset_to_graph_path, query_path, output_path, model_params, batch_size):
+def main(build_graph, dataset_to_graph_path, query_path, output_path, model_params, batch_size):
     """
-    Main function that creates and queries the knowledge graph.
-    """
-    graph = None
+    Main function to run the knowledge graph creation and querying.
     
+    Parameters are provided through command-line arguments.
+    """
     # Parse model parameters if provided
     model_config = {
         "model": "/model",
@@ -345,23 +437,35 @@ async def main(build_graph, dataset_to_graph_path, query_path, output_path, mode
     
     # Initialize LLM
     llm = VLLMChatOpenAI(**model_config)
-
-    # Create knowledge graph if requested
-    if build_graph:
-        graph, _ = await create_knowledge_graph(
-            dataset_path=dataset_to_graph_path,
-            llm=llm,
+    
+    # Initialize graph (will be used even if not building graph from scratch)
+    graph = MemgraphGraph(
+        url=url, username=username, password=password, refresh_schema=False
+    )
+    
+    # Run the async functions
+    async def run():
+        nonlocal graph  # Add this line to access the outer graph variable
+        
+        if build_graph:
+            graph, _ = await create_knowledge_graph(
+                dataset_path=dataset_to_graph_path,
+                llm=llm,
+                batch_size=batch_size
+            )
+        
+        # Query knowledge graph
+        results = await query_knowledge_graph(
+            graph, 
+            llm,
+            questions_path=query_path,
+            output_path=output_path,
             batch_size=batch_size
         )
+        return results
     
-    # Query knowledge graph
-    results = await query_knowledge_graph(
-        graph, 
-        llm,
-        questions_path=query_path,
-        output_path=output_path,
-        batch_size=batch_size
-    )
+    # Run the async function
+    return asyncio.run(run())
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
