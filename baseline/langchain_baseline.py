@@ -1,18 +1,18 @@
 import os
-# from langchain_neo4j import GraphCypherQAChain, Neo4jGraph
 from langchain_community.graphs import MemgraphGraph
-from langchain_community.chains.graph_qa.memgraph import MemgraphQAChain
+# from langchain_community.chains.graph_qa.memgraph import MemgraphQAChain
+from baseline.utils.custom_memgraph_qa import CustomMemgraphQAChain
 from langchain_experimental.graph_transformers import LLMGraphTransformer
 from deep_reason.utils import VLLMChatOpenAI
 from deep_reason.envs import OPENAI_API_BASE, OPENAI_API_KEY
-from deep_reason.kg_agent.utils import load_obliqa_dataset
+from deep_reason.utils import load_obliqa_dataset, load_books_mx_dataset
 from langchain_core.documents import Document
 import pandas as pd
 import logging
 from typing import List
 import asyncio
 from langchain_core.runnables import RunnableConfig
-from deep_reason.kg_agent.utils import Chunk
+from deep_reason.schemes import Chunk
 import openai
 from langchain_core.prompts.prompt import PromptTemplate
 import click
@@ -45,98 +45,6 @@ Generated Cypher statement:"""
 # NEO4J_URI = "bolt://localhost:7687"
 # NEO4J_USERNAME = "neo4j"
 # NEO4J_PASSWORD = "password"  # Replace with your actual password
-
-def from_llm(
-    cls,
-    llm: Optional[BaseLanguageModel] = None,
-    *,
-    qa_prompt: Optional[BasePromptTemplate] = None,
-    cypher_prompt: Optional[BasePromptTemplate] = None,
-    cypher_llm: Optional[BaseLanguageModel] = None,
-    qa_llm: Optional[Union[BaseLanguageModel, Any]] = None,
-    qa_llm_kwargs: Optional[Dict[str, Any]] = None,
-    cypher_llm_kwargs: Optional[Dict[str, Any]] = None,
-    use_function_response: bool = False,
-    function_response_system: str = FUNCTION_RESPONSE_SYSTEM,
-    **kwargs: Any,
-) -> MemgraphQAChain:
-    """Initialize from LLM."""
-
-    if not cypher_llm and not llm:
-        raise ValueError("Either `llm` or `cypher_llm` parameters must be provided")
-    if not qa_llm and not llm:
-        raise ValueError("Either `llm` or `qa_llm` parameters must be provided")
-    if cypher_llm and qa_llm and llm:
-        raise ValueError(
-            "You can specify up to two of 'cypher_llm', 'qa_llm'"
-            ", and 'llm', but not all three simultaneously."
-        )
-    if cypher_prompt and cypher_llm_kwargs:
-        raise ValueError(
-            "Specifying cypher_prompt and cypher_llm_kwargs together is"
-            " not allowed. Please pass prompt via cypher_llm_kwargs."
-        )
-    if qa_prompt and qa_llm_kwargs:
-        raise ValueError(
-            "Specifying qa_prompt and qa_llm_kwargs together is"
-            " not allowed. Please pass prompt via qa_llm_kwargs."
-        )
-    use_qa_llm_kwargs = qa_llm_kwargs if qa_llm_kwargs is not None else {}
-    use_cypher_llm_kwargs = (
-        cypher_llm_kwargs if cypher_llm_kwargs is not None else {}
-    )
-    if "prompt" not in use_qa_llm_kwargs:
-        use_qa_llm_kwargs["prompt"] = (
-            qa_prompt if qa_prompt is not None else MEMGRAPH_QA_PROMPT
-        )
-    if "prompt" not in use_cypher_llm_kwargs:
-        use_cypher_llm_kwargs["prompt"] = (
-            cypher_prompt
-            if cypher_prompt is not None
-            else MEMGRAPH_GENERATION_PROMPT
-        )
-
-    qa_llm = qa_llm or llm
-    if use_function_response:
-        try:
-            qa_llm.bind_tools({})  # type: ignore[union-attr]
-            response_prompt = ChatPromptTemplate.from_messages(
-                [
-                    SystemMessage(content=function_response_system),
-                    HumanMessagePromptTemplate.from_template("{question}"),
-                    MessagesPlaceholder(variable_name="function_response"),
-                ]
-            )
-            qa_chain = response_prompt | qa_llm | StrOutputParser()  # type: ignore
-        except (NotImplementedError, AttributeError):
-            raise ValueError("Provided LLM does not support native tools/functions")
-    else:
-        qa_chain = use_qa_llm_kwargs["prompt"] | qa_llm | StrOutputParser()  # type: ignore
-
-    prompt = use_cypher_llm_kwargs["prompt"]
-    llm_to_use = cypher_llm if cypher_llm is not None else llm
-
-    if prompt is not None and llm_to_use is not None:
-        def _cypher_gen_print(x):
-            print('OUTPUT: ',x)
-            return x
-
-        cypher_generation_chain = prompt | llm_to_use | StrOutputParser() | RunnableLambda(_cypher_gen_print) # type: ignore[arg-type]
-    else:
-        raise ValueError(
-            "Missing required components for the cypher generation chain: "
-            "'prompt' or 'llm'"
-        )
-
-    graph_schema = kwargs["graph"].get_schema
-
-    return cls(
-        graph_schema=graph_schema,
-        qa_chain=qa_chain,
-        cypher_generation_chain=cypher_generation_chain,
-        use_function_response=use_function_response,
-        **kwargs,
-    )
 
 url = os.environ.get("MEMGRAPH_URI", "bolt://localhost:7687")
 username = os.environ.get("MEMGRAPH_USERNAME", "")
@@ -283,7 +191,7 @@ async def process_queries_in_batches(chain, inputs, batch_size=10):
     
     return all_responses
 
-async def create_knowledge_graph(dataset_path="datasets/ObliQA/StructuredRegulatoryDocuments", llm=None, batch_size=5):
+async def create_knowledge_graph(dataset_path="datasets/tatneft/книги_муслимов_хисамов/books_chunks.json", llm=None, batch_size=5):
     """
     Creates a knowledge graph from the provided dataset.
     
@@ -301,9 +209,15 @@ async def create_knowledge_graph(dataset_path="datasets/ObliQA/StructuredRegulat
     )
     
     # Load and process chunks
-    chunks = load_obliqa_dataset(obliqa_dir=dataset_path, file_idx=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15])
+    if 'obliqa' in dataset_path.lower():
+        chunks = load_obliqa_dataset(obliqa_dir=dataset_path, file_idx=[1])
+    elif 'книги_муслимов_хисамов' in dataset_path.lower():
+        chunks = load_books_mx_dataset(dataset_path)
+    else:
+        raise ValueError(f"Unknown dataset path: {dataset_path}")
     chunks = merge_chunks(chunks)
     print(f"Total chunks after merging: {len(chunks)}")
+    chunks = chunks[:100] # TODO: remove
     
     # Convert chunks to documents
     documents = [Document(page_content=chunk.text) for chunk in chunks]
@@ -346,20 +260,20 @@ async def query_knowledge_graph(graph, llm, questions_path="datasets/ObliQA/Obli
 
 
     # Create query chain
-    chain = MemgraphQAChain.from_llm(
+    chain = CustomMemgraphQAChain.from_llm(
         llm,
         graph=graph,
         model_name="qwen2.5-72b-instruct",
         allow_dangerous_requests=True,
         cypher_prompt=PromptTemplate.from_template(CYPHER_GENERATION_TEMPLATE),
-        return_direct=True,
+        # return_direct=True,
         return_intermediate_steps=True,
     )
     
     # Load questions
     questions_df = pd.read_json(questions_path)
     inputs = []
-    questions_subset = questions_df.head(10)
+    questions_subset = questions_df.head(10) # TODO: remove
     
     for ct in questions_subset['Question'].tolist():
         input_dict = {
@@ -400,19 +314,23 @@ async def query_knowledge_graph(graph, llm, questions_path="datasets/ObliQA/Obli
         
     return questions_subset
 
+
+# tat datasets/tatneft/книги_муслимов_хисамов/books_chunks.json
+# obliqa datasets/ObliQA/StructuredRegulatoryDocuments
 @click.command()
 @click.option('--build-graph', is_flag=True, help='Whether to build the knowledge graph', default=False)
 @click.option('--dataset-to-graph-path', default="datasets/ObliQA/StructuredRegulatoryDocuments", 
               help='Path to the dataset to create the graph')
-@click.option('--query-path', default="datasets/ObliQA/ObliQA_train_filtered.json", 
+@click.option('--answer-queries', is_flag=True, help='Whether to answer the questions', default=True)
+@click.option('--query-path', default="datasets/ObliQA/ObliQA_train_filtered_doc1.json", 
               help='Path to JSON file with questions')
-@click.option('--output-path', default="datasets/gen_results/qwen_72b/ObliQA_train_graph_answers_langchain_sample_filtered.json", 
+@click.option('--output-path', default="datasets/gen_results/qwen_72b/tat_testq_graph_answers_langchain.json", 
               help='Path to save the results')
 @click.option('--model-params', default=None, 
               help='JSON string with parameters for the VLLMChatOpenAI model')
 @click.option('--batch-size', default=50, type=int, 
               help='Batch size to process data with model')
-def main(build_graph, dataset_to_graph_path, query_path, output_path, model_params, batch_size):
+def main(build_graph, dataset_to_graph_path, answer_queries, query_path, output_path, model_params, batch_size):
     """
     Main function to run the knowledge graph creation and querying.
     
@@ -455,14 +373,15 @@ def main(build_graph, dataset_to_graph_path, query_path, output_path, model_para
             )
         
         # Query knowledge graph
-        results = await query_knowledge_graph(
-            graph, 
-            llm,
-            questions_path=query_path,
-            output_path=output_path,
-            batch_size=batch_size
-        )
-        return results
+        if answer_queries:
+            results = await query_knowledge_graph(
+                graph, 
+                llm,
+                questions_path=query_path,
+                output_path=output_path,
+                batch_size=batch_size
+            )
+            return results
     
     # Run the async function
     return asyncio.run(run())

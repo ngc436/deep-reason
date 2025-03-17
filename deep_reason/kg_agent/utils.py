@@ -12,7 +12,6 @@ from transformers import PreTrainedTokenizerBase
 from pathlib import Path
 import hashlib
 
-from deep_reason.schemes import Chunk
 from deep_reason.kg_agent.schemes import Triplet, AggregationInput
 
 
@@ -27,24 +26,7 @@ def measure_time(name: Optional[str] = None):
 
     suffix = f"for {name}" if name else ""
     logger.info(f"Time taken {suffix}: {(end_time - start_time).total_seconds()} seconds")
-
-
-def load_obliqa_dataset(obliqa_dir: str, file_idx: None | List[int] = None) -> List[Chunk]:
-    if file_idx is None:
-        fnames = os.listdir(obliqa_dir)
-    else:
-        fnames = [f"{i}.json" for i in file_idx]
-    all_chunks = []
-    for fname in fnames:
-        df = pd.read_json(f"{obliqa_dir}/{fname}", orient="records")
-        for ix, row in df.iterrows():
-            all_chunks.append(Chunk(text=row["Passage"], 
-                                    chapter_name=str(row["PassageID"]), 
-                                    document_id=row["DocumentID"], 
-                                    order_id=ix))
-    return all_chunks
     
-
 
 class KGConstructionAgentException(Exception):
     pass

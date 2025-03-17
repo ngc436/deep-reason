@@ -1,3 +1,5 @@
+import os 
+import pandas as pd
 from abc import ABC, abstractmethod
 from typing import (Generic, List, Optional, Tuple, TypeVar, Any, AsyncIterator, 
                     Union, Sequence)
@@ -10,6 +12,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
 from langgraph.pregel.io import AddableValuesDict
 from deep_reason.schemes import PipelineEvent
+from deep_reason.schemes import Chunk
 
 MessageLikeRepresentation = Union[
     BaseMessage, list[str], tuple[str, str], str, dict[str, Any]
@@ -167,3 +170,36 @@ class SpecialTokens:
 def _get_chunks(text: str, chunk_size: int) -> List[str]:
     ''' Split text into chunks of equal size'''
     return [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+
+
+def load_obliqa_dataset(obliqa_dir: str, file_idx: None | List[int] = None) -> List[Chunk]:
+    if file_idx is None:
+        fnames = os.listdir(obliqa_dir)
+    else:
+        fnames = [f"{i}.json" for i in file_idx]
+    all_chunks = []
+    for fname in fnames:
+        df = pd.read_json(f"{obliqa_dir}/{fname}", orient="records")
+        for ix, row in df.iterrows():
+            all_chunks.append(Chunk(text=row["Passage"], 
+                                    chapter_name=str(row["PassageID"]), 
+                                    document_id=row["DocumentID"], 
+                                    order_id=ix))
+    return all_chunks
+
+def load_books_mx_dataset(books_mx_path: str) -> List[Chunk]:
+    df = pd.read_json(books_mx_path, orient="records")
+    all_chunks = []
+    previous_document_fname = None
+    chunk_ix = 0
+    for ix, row in df.iterrows():
+        current_document_fname =str(row["_source"]["metadata"]["file_name"])
+        if current_document_fname != previous_document_fname:
+            chunk_ix = 0
+            previous_document_fname = current_document_fname
+        all_chunks.append(Chunk(text=row["_source"]["paragraph"], 
+                                chapter_name=str(row["_source"]["metadata"]["chapter"]), 
+                                document_id=row["_source"]["metadata"]["idx"], 
+                                order_id=chunk_ix))
+        chunk_ix += 1
+    return all_chunks

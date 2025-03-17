@@ -13,7 +13,7 @@ class PipelineEvent(BaseModel):
 class Chunk(BaseModel):
     text: str | None = Field(description="Text of the chunk")
     chapter_name: str | None = Field(description="Name of the chapter")
-    document_id: int = Field(description="Id of the document")
+    document_id: int | str = Field(description="Id of the document")
     order_id: int = Field(description="Order id of the chunk in the document")
 
 class QAnswer(BaseModel):
