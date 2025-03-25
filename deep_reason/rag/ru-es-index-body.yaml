@@ -1,0 +1,58 @@
+settings:
+  max_terms_count: 1000000
+  number_of_shards: 1
+  routing_partition_size: 1
+  number_of_replicas: 0
+  refresh_interval: 30s
+  analysis:
+    filter:
+      russian_stemmer:
+        type: stemmer
+        language: russian
+      russian_stop:
+        type: stop
+        stopwords: _russian_
+      russian_keywords:
+        type: keyword_marker
+        keywords: []
+    analyzer:
+      russian_analyzer:
+        type: custom
+        tokenizer: standard
+        filter:
+          - lowercase
+          - russian_stop
+          - russian_keywords
+          - russian_stemmer
+mappings:
+#  _routing:
+#    required: true
+  properties:
+    vector:
+      type: dense_vector
+      dims: 3584
+      index: True
+      similarity: cosine
+      meta:
+        description: "intfloat/e5-mistral-7b-instruct embeddings"
+    metadata:
+      properties:
+        idx:
+          type: keyword
+          similarity: boolean
+          meta:
+            description: "Unique uuid of the full document"
+        chapter:
+          type: text
+          analyzer: russian_analyzer
+        file_name:
+          type: text
+          analyzer: russian_analyzer
+        source:
+          type: text
+        date:
+          type: date
+          format: yyyy-MM-dd
+    paragraph:
+      type: text
+      analyzer: russian_analyzer
