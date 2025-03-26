@@ -114,7 +114,7 @@ def load_dataset_as_docs(dataset: str, dataset_path: Optional[str] = None) -> Li
                     seen_uids.add(uid)
                     documents.append(
                         Document(
-                            page_content=passage['Passage'],
+                            page_content=passage['Passage'] or "   ",
                             metadata={
                                 "document_id": passage['DocumentID'],
                                 "chunk_id": passage['PassageID']
@@ -156,7 +156,7 @@ async def load_and_upload_dataset(*,
 
         logger.info(f"Embedding chunks from dataset: {dataset}. Number of chunks: {len(transformed_docs)}")
 
-        emb_docs = await openai_embedder.aembed_documents([doc.page_content for doc in transformed_docs])
+        emb_docs = await openai_embedder.aembed_documents([doc.page_content for doc in transformed_docs], chunk_size=100)
         embeddings = [np.array(emb) for emb in emb_docs]
 
         logger.info(f"Uploading documents to Elasticsearch for dataset: {dataset}")
