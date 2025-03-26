@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import uuid
@@ -86,26 +87,37 @@ def load_dataset_as_docs(dataset: str, dataset_path: Optional[str] = None) -> Li
 
     match dataset:
         case "ObliQA":
-            df = pd.read_json(dataset_path)
+            if os.path.isdir(dataset_path):
+                json_files = [
+                    os.path.join(dataset_path, file) 
+                    for file in os.listdir(dataset_path) 
+                    if os.path.isfile(os.path.join(dataset_path, file)) and file.endswith(".json")
+                ]
+            else:
+                json_files = [dataset_path]
+
             # Track seen passage IDs to avoid duplicates
-            seen_passage_ids = set()
+            seen_uids = set()
             documents = []
-            
-            for passages in df["Passages"]:
+
+            for json_file in json_files:
+                with open(json_file, 'r') as f:
+                    passages = json.load(f)
+                
                 for passage in passages:
-                    passage_id = passage['PassageID']
-                    
+                    uid = passage['ID']
+                        
                     # Skip if we've already seen this passage ID
-                    if passage_id in seen_passage_ids:
+                    if uid in seen_uids:
                         continue
-                    
-                    seen_passage_ids.add(passage_id)
+                        
+                    seen_uids.add(uid)
                     documents.append(
                         Document(
                             page_content=passage['Passage'],
                             metadata={
                                 "document_id": passage['DocumentID'],
-                                "chunk_id": passage_id
+                                "chunk_id": passage['PassageID']
                             }
                         )
                     )
