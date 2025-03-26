@@ -455,7 +455,9 @@ async def run_rag_pipeline(*,
                            tokenizer_path: str,
                            es_index: str, es_host: str, es_basic_auth: Tuple[str, str], 
                            openai_model: str, openai_base_url: str, openai_api_key: str,
-                           embedding_model: str, embedding_base_url: str, embedding_api_key: str) -> List[RAGIntermediateOutputs]:
+                           embedding_model: str, embedding_base_url: str, embedding_api_key: str,
+                           do_vector_search: bool = True, do_full_text_search: bool = True,
+                           do_planning: bool = True, do_reranking: bool = True) -> List[RAGIntermediateOutputs]:
     llm = VLLMChatOpenAI(
         model=openai_model,
         base_url=openai_base_url,
@@ -474,6 +476,7 @@ async def run_rag_pipeline(*,
     async with AsyncElasticsearch(
         hosts=es_host,
         basic_auth=es_basic_auth,
+        timeout=300
     ) as es_client:
         es_store = ElasticsearchStore(
             embedding=embedding_model,
@@ -491,7 +494,8 @@ async def run_rag_pipeline(*,
             es_client=es_client,
             es_collection=es_index,
         )           
-        chain = builder.build_chain(do_planning=False)
+        chain = builder.build_chain(do_planning=do_planning, do_reranking=do_reranking, 
+                                    do_vector_search=do_vector_search, do_full_text_search=do_full_text_search)
         
         final_states = await chain.abatch(inputs=[
             RAGIntermediateOutputs(question=question) 

@@ -33,11 +33,16 @@ def rag():
 @click.option("--embedding-model", type=str, default="/model", help="Embedding model")
 @click.option("--embedding-base-url", type=str, default="http://d.dgx:8029/v1", help="Embedding base URL")
 @click.option("--embedding-api-key", type=str, default="token-abc123", help="Embedding API key")
+@click.option("--do-vector-search", type=bool, default=True, help="Do vector search")
+@click.option("--do-full-text-search", type=bool, default=True, help="Do full text search")
+@click.option("--do-planning", type=bool, default=True, help="Do planning")
+@click.option("--do-reranking", type=bool, default=True, help="Do reranking")
 def ask(question: str, 
         tokenizer_path: str,
         es_index: str, es_host: str, es_basic_auth: str, 
         openai_model: str, openai_base_url: str, openai_api_key: str, 
-        embedding_model: str, embedding_base_url: str, embedding_api_key: str):
+        embedding_model: str, embedding_base_url: str, embedding_api_key: str,
+        do_vector_search: bool, do_full_text_search: bool, do_planning: bool, do_reranking: bool):
     es_basic_auth = parse_basic_auth(es_basic_auth)
     
     final_states = asyncio.run(
@@ -53,6 +58,10 @@ def ask(question: str,
             embedding_model=embedding_model,
             embedding_base_url=embedding_base_url,
             embedding_api_key=embedding_api_key,
+            do_vector_search=do_vector_search,
+            do_full_text_search=do_full_text_search,
+            do_planning=do_planning,
+            do_reranking=do_reranking
         )
     )
     print(f"Answer:\n{final_states[0].answer}")
@@ -70,11 +79,16 @@ def ask(question: str,
 @click.option("--embedding-model", type=str, default="/model", help="Embedding model")
 @click.option("--embedding-base-url", type=str, default="http://d.dgx:8029/v1", help="Embedding base URL")
 @click.option("--embedding-api-key", type=str, default="token-abc123", help="Embedding API key")
+@click.option("--do-vector-search", type=bool, default=True, help="Do vector search")
+@click.option("--do-full-text-search", type=bool, default=True, help="Do full text search")
+@click.option("--do-planning", type=bool, default=True, help="Do planning")
+@click.option("--do-reranking", type=bool, default=True, help="Do reranking")
 def ask_many(questions_path: str, 
              tokenizer_path: str,
              es_index: str, es_host: str, es_basic_auth: str, 
              openai_model: str, openai_base_url: str, openai_api_key: str, 
-             embedding_model: str, embedding_base_url: str, embedding_api_key: str):
+             embedding_model: str, embedding_base_url: str, embedding_api_key: str,
+             do_vector_search: bool, do_full_text_search: bool, do_planning: bool, do_reranking: bool):
     questions = pd.read_json(questions_path)["question"].tolist()
     
     es_basic_auth = parse_basic_auth(es_basic_auth)
@@ -92,6 +106,10 @@ def ask_many(questions_path: str,
             embedding_model=embedding_model,
             embedding_base_url=embedding_base_url,
             embedding_api_key=embedding_api_key,
+            do_vector_search=do_vector_search,
+            do_full_text_search=do_full_text_search,
+            do_planning=do_planning,
+            do_reranking=do_reranking
         )
     )
     print(f"Answer:\n{final_states[0].answer}")
