@@ -9,6 +9,9 @@ from deep_reason.rag.upload import do_drop_index, load_and_upload_dataset
 from deep_reason.utils import parse_basic_auth
 
 
+logger = logging.getLogger(__name__)
+
+
 @click.group()  
 def cli():
     logging.basicConfig(
@@ -69,6 +72,7 @@ def ask(question: str,
 
 @rag.command()
 @click.option("--questions-path", type=str, required=True, help="Path to a file with questions in JSON format [{'question': '...'}, ...]")
+@click.option("--output-path", type=str, required=True, default="answers.json", help="Path to a file to save the answers in JSON format")
 @click.option("--tokenizer-path", type=str, default="resources/qwen2-72b-model-tokenizer", help="Tokenizer path")
 @click.option("--es-index", type=str, default="test", help="Elasticsearch index")
 @click.option("--es-host", type=str, default="http://d.dgx:9205", help="Elasticsearch host")
@@ -83,16 +87,19 @@ def ask(question: str,
 @click.option("--do-full-text-search", type=bool, default=True, help="Do full text search")
 @click.option("--do-planning", type=bool, default=True, help="Do planning")
 @click.option("--do-reranking", type=bool, default=True, help="Do reranking")
-def ask_many(questions_path: str, 
+def ask_many(questions_path: str, output_path: str, 
              tokenizer_path: str,
              es_index: str, es_host: str, es_basic_auth: str, 
              openai_model: str, openai_base_url: str, openai_api_key: str, 
              embedding_model: str, embedding_base_url: str, embedding_api_key: str,
              do_vector_search: bool, do_full_text_search: bool, do_planning: bool, do_reranking: bool):
+    logger.info(f"Computing answers for questions from {questions_path}")
+
     questions = pd.read_json(questions_path)["question"].tolist()
     
     es_basic_auth = parse_basic_auth(es_basic_auth)
 
+    
     final_states = asyncio.run(
         run_rag_pipeline(
             questions=questions,
@@ -112,7 +119,15 @@ def ask_many(questions_path: str,
             do_reranking=do_reranking
         )
     )
-    print(f"Answer:\n{final_states[0].answer}")
+
+    logger.info(f"Answers successfully computed. Writing to {output_path}")
+
+    answers = [final_state.model_dump_json() for final_state in final_states]
+
+    with open(output_path, "w") as f:
+        f.write("\n".join(answers))
+
+    logger.info(f"Answers saved to {output_path}")
 
 
 ######################################################
