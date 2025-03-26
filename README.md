@@ -69,3 +69,14 @@ To push the image to the registry, run:
 ./bin/docker-cli.sh push
 ```
 
+## Elasticsearch Deployment
+
+To deploy an Elasticsearch on a remote or local node:
+1. Copy bin/create-es-volume.sh to the target node.
+2. Edit this file and set correct path for a volume to store Elasticsearch data.
+3. Run the script. It will create a volume that will be used by Elasticsearch.
+4. Copy config/compose.yaml to the target node.
+5. Run `docker compose up -d` to start Elasticsearch.
+
+Note: on d.dgx the compose file of ES is currently located in /usr/local/lib/llm-serving/compose-kg-es
+
