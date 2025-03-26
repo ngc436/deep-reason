@@ -3,11 +3,14 @@ name = "deep_reason"
 version = "0.1.0"
 description = ""
 authors = ["name <email>"]
+packages = [{include = "deep_reason"}]
+readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.12,<3.13"
 chromadb = "^0.6.3"
-langgraph = "^0.3.2"
+langgraph = "^0.3.20"
+#ttn-gpt-researcher = {git = "https://github.com/Industrial-AI-Research-Lab/ttn-gpt-researcher.git", branch = "main"}
 pandas = "^2.2.3"
 vllm = "^0.7.3"
 click = "^8.1.8"
@@ -15,9 +18,83 @@ tiktoken = "^0.8.0"
 networkx = "^3.4.2"
 langchain-neo4j = "^0.4.0"
 pydantic = "^2.7.0"
+graphrag = "^2.0.0"
+elasticsearch = {extras = ["async"], version = "^8.17.2"}
+langchain-elasticsearch = "^0.3.2"
 langchain-core = "^0.3.8"
 langchain-experimental = "^0.3.4"
-langchain-openai = "^0.2.0"
-elasticsearch = "^8.17.2"
-langchain-elasticsearch = "^0.3.2"
-graphrag = "^2.0.0"
+langchain-openai = "^0.3.10"
+langchain = "^0.3.21"
+
+[tool.poetry.scripts]
+drctl = "deep_reason.main:cli"
+
+[tool.poetry.group.dev.dependencies]
+isort = "^6.0.1"
+black = "^25.1.0"
+ruff = "^0.11.2"
+
+[tool.isort]
+profile = "black"
+force_single_line = true
+atomic = true
+include_trailing_comma = true
+lines_after_imports = 2
+lines_between_types = 1
+use_parentheses = true
+filter_files = true
+
+[tool.black]
+line-length = 120
+indent-width = 4
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+  | tests/.*/setup.py
+  | supplementary
+)/
+'''
+
+[tool.ruff]
+line-length = 120
+indent-width = 4
+# Exclude a variety of commonly ignored directories.
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+]
+

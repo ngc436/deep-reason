@@ -171,6 +171,12 @@ cython_debug/
 .pypirc
 datasets/
 
+.vscode/
+
 # Deep Reason
 kg_output/
 examples/testraggraph/
+*.orig
+.ruff_cache/
+requirements.txt
+

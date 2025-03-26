@@ -203,3 +203,23 @@ def load_books_mx_dataset(books_mx_path: str) -> List[Chunk]:
                                 order_id=chunk_ix))
         chunk_ix += 1
     return all_chunks
+
+
+def parse_basic_auth(basic_auth_string: str) -> tuple[str, str]:
+    """
+    Parse a basic auth string in the format 'username:password' into a tuple of (username, password).
+    
+    Args:
+        basic_auth_string: A string in the format 'username:password'
+        
+    Returns:
+        A tuple of (username, password)
+        
+    Raises:
+        ValueError: If the string is not in the correct format
+    """
+    basic_auth = basic_auth_string.split(":")
+    if len(basic_auth) != 2:
+        raise ValueError("Basic auth must be in the format 'username:password'")
+    return (basic_auth[0], basic_auth[1])
+

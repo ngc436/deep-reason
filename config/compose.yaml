@@ -1,0 +1,34 @@
+services:
+  elasticsearch:
+    image: elasticsearch:8.15.3
+    ports:
+      - "9205:9200"
+      - "9305:9300"
+    environment:
+      - node.name=es-node-01
+      - discovery.type=single-node
+      - ELASTIC_PASSWORD=admin
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      - http.cors.enabled=false
+      - ES_JAVA_OPTS=-Xms16g -Xmx16g
+    mem_limit: "32g"
+    volumes:
+      - es-data-vol:/usr/share/elasticsearch/data
+    restart: unless-stopped 
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s -f -u elastic:admin http://localhost:9200/_cluster/health || exit 1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+      start_period: 2s
+
+volumes:
+  es-data-vol:
+    external: true
+
