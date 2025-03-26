@@ -177,4 +177,6 @@ datasets/
 kg_output/
 examples/testraggraph/
 *.orig
+.ruff_cache/
+requirements.txt
 
