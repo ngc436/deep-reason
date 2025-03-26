@@ -458,6 +458,7 @@ async def run_rag_pipeline(*,
                            embedding_model: str, embedding_base_url: str, embedding_api_key: str,
                            do_vector_search: bool = True, do_full_text_search: bool = True,
                            do_planning: bool = True, do_reranking: bool = True) -> List[RAGIntermediateOutputs]:
+    es_timeout = 300
     llm = VLLMChatOpenAI(
         model=openai_model,
         base_url=openai_base_url,
@@ -476,7 +477,7 @@ async def run_rag_pipeline(*,
     async with AsyncElasticsearch(
         hosts=es_host,
         basic_auth=es_basic_auth,
-        timeout=300
+        timeout=es_timeout
     ) as es_client:
         es_store = ElasticsearchStore(
             embedding=embedding_model,
@@ -484,7 +485,8 @@ async def run_rag_pipeline(*,
             es_url=es_host,
             es_user=es_basic_auth[0],
             es_password=es_basic_auth[1],
-            query_field="paragraph"
+            query_field="paragraph",
+            es_params={"timeout": es_timeout}
         )
 
         builder = RAGPipelineBuilder(
