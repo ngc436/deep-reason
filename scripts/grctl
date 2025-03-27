@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+
+set -e
+
+# Define global container name
+CONTAINER_NAME="graphrag"
+DATA_FOLDER=${DATA_FOLDER:-"tat_data"}
+
+run_image() {
+    local repo_name=${1:-"node2.bdcl:5000"}
+    local image_name="${repo_name}/${CONTAINER_NAME}:latest"
+
+    docker pull ${image_name}
+
+    docker run -d --name ${CONTAINER_NAME} \
+        -v $(pwd)/graphs/${DATA_FOLDER}:/data \
+        ${image_name} \
+        graphrag index --root /data
+}
+
+run_cli() {
+    local repo_name=${1:-"node2.bdcl:5000"}
+    local image_name="${repo_name}/${CONTAINER_NAME}:latest"
+
+    docker pull ${image_name}
+
+    # Check if container already exists
+    if docker ps -a | grep -q ${CONTAINER_NAME}; then
+        echo "Container ${CONTAINER_NAME} already exists"
+        # Start the container if it's not running
+        if ! docker ps | grep -q ${CONTAINER_NAME}; then
+            echo "Starting container ${CONTAINER_NAME}"
+            docker start ${CONTAINER_NAME}
+        fi
+        # Attach to the running container
+        docker exec -it ${CONTAINER_NAME} /bin/bash
+    else
+        # Run a new container
+        echo "Creating and running new container ${CONTAINER_NAME}"
+        docker run -it --name ${CONTAINER_NAME} \
+            -v $(pwd)/graphs/${DATA_FOLDER}:/data \
+            ${image_name} \
+            /bin/bash
+    fi
+}
+
+run_init() {
+    local repo_name=${1:-"node2.bdcl:5000"}
+    local image_name="${repo_name}/${CONTAINER_NAME}:latest"
+
+    docker pull ${image_name}
+
+    docker run -it --rm --name ${CONTAINER_NAME} \
+        -v $(pwd)/${CONTAINER_NAME}_data:/data \
+        ${image_name} \
+        graphrag init --root /data
+}
+
+build_image() {
+    echo "Building image..."
+    # Export requirements.txt using poetry
+    poetry export -f requirements.txt --output requirements.txt --without-hashes
+    
+    # Build wheel using poetry
+    poetry build
+    
+    # Build the docker image
+    docker build -t ${CONTAINER_NAME}:latest -f ./docker/Dockerfile .
+    
+    echo "Image built successfully: ${CONTAINER_NAME}:latest"
+}
+
+push_image() {
+    local repo_name=${1:-"node2.bdcl:5000"}
+    
+    echo "Pushing image to registry..."
+    # Tag the docker image
+    docker tag ${CONTAINER_NAME}:latest ${repo_name}/${CONTAINER_NAME}:latest
+    
+    # Push the docker image to the registry
+    docker push ${repo_name}/${CONTAINER_NAME}:latest
+    
+    echo "Image pushed successfully: ${repo_name}/${CONTAINER_NAME}:latest"
+}
+
+deploy_image() {
+    local repo_name=${1:-"myrepo"}
+    
+    # Do both build and push
+    build_image
+    push_image "$repo_name"
+    
+    echo "Deployment complete!"
+}
+
+rm_container() {
+    echo "Removing container ${CONTAINER_NAME}..."
+    docker rm -f ${CONTAINER_NAME} 2>/dev/null || echo "Container ${CONTAINER_NAME} not found or already removed"
+    echo "Container removed successfully"
+}
+
+display_help() {
+    echo "Usage: grctl COMMAND [OPTIONS]"
+    echo ""
+    echo "Commands:"
+    echo "  build-image         Build the Docker image"
+    echo "  push-image [REPO]   Push the image to registry (default repo: myrepo)"
+    echo "  deploy-image [REPO] Build and push the image (default repo: myrepo)"
+    echo "  run-image [REPO]    Run the image using pushed image (default repo: node2.bdcl:5000)"
+    echo "  run-cli [REPO]      Run the image and provide console to work with 'graphrag' command"
+    echo "  rm                  Remove the ${CONTAINER_NAME} container"
+    echo "  help                Display this help message"
+}
+
+main() {
+    local command=$1
+    shift || true
+    
+    case "$command" in
+        build-image)
+            build_image "$@"
+            ;;
+        push-image)
+            push_image "$@"
+            ;;
+        deploy-image)
+            deploy_image "$@"
+            ;;
+        run-image)
+            run_image "$@"
+            ;;
+	run-init)
+	    run_init "$@"
+	    ;;
+	run-cli)
+	    run_cli "$@"
+	    ;;
+        rm)
+            rm_container "$@"
+            ;;
+        help|--help|-h)
+            display_help
+            ;;
+        *)
+            echo "Error: Unknown command '$command'"
+            display_help
+            exit 1
+            ;;
+    esac
+}
+
+# Execute main function with all arguments
+main "$@"
