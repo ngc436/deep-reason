@@ -528,23 +528,20 @@ async def run_rag_pipeline(*,
                                         do_vector_search=do_vector_search, do_full_text_search=do_full_text_search)
             
             # Setup progress bar
-            pbar = tqdm(total=len(questions_to_process), desc="Processing questions")
+            pbar = tqdm(total=len(questions_to_process), desc="Processing questions") 
             
-            # Process uncached questions
-            gen = chain.abatch_as_completed(
+            # File to append results as they come in
+            if cache_file:
+                cache_dir = os.path.dirname(os.path.abspath(cache_file))
+                os.makedirs(cache_dir, exist_ok=True)
+            
+            async for _, final_state in chain.abatch_as_completed(
                 inputs=[
                     RAGIntermediateOutputs(question=question) 
                     for question in questions_to_process
                 ], 
                 config=RunnableConfig(max_concurrency=max_concurrency)
-            )
-            
-            # File to append results as they come in
-            if cache_file:
-                cache_dir = os.path.dirname(cache_file)
-                os.makedirs(cache_dir, exist_ok=True)
-            
-            async for final_state in gen:
+            ):
                 # Validate and add to cache
                 result = RAGIntermediateOutputs.model_validate(final_state)
                 cache[result.question] = result
