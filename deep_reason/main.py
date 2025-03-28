@@ -71,7 +71,7 @@ def ask(question: str,
 
 
 @rag.command()
-@click.option("--questions-path", type=str, required=True, help="Path to a file with questions in JSON format [{'question': '...'}, ...]")
+@click.option("--questions-path", type=str, required=True, default="questions.json", help="Path to a file with questions in JSON format [{'question': '...'}, ...]")
 @click.option("--output-path", type=str, required=True, default="answers.json", help="Path to a file to save the answers in JSON format")
 @click.option("--tokenizer-path", type=str, default="resources/qwen2-72b-model-tokenizer", help="Tokenizer path")
 @click.option("--es-index", type=str, default="test", help="Elasticsearch index")
