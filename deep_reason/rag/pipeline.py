@@ -1,4 +1,7 @@
 import logging
+import json
+import os
+from tqdm.asyncio import tqdm
 
 from typing import Annotated, Tuple
 from typing import Any
@@ -457,7 +460,31 @@ async def run_rag_pipeline(*,
                            openai_model: str, openai_base_url: str, openai_api_key: str,
                            embedding_model: str, embedding_base_url: str, embedding_api_key: str,
                            do_vector_search: bool = True, do_full_text_search: bool = True,
-                           do_planning: bool = True, do_reranking: bool = True) -> List[RAGIntermediateOutputs]:
+                           do_planning: bool = True, do_reranking: bool = True,
+                           max_concurrency: int = 100,
+                           cache_file: Optional[str] = None) -> List[RAGIntermediateOutputs]:
+    # Initialize cache dictionary
+    cache = {}
+    
+    # Load existing cache if file exists
+    if cache_file and os.path.exists(cache_file):
+        with open(cache_file, 'r') as f:
+            for line in f:
+                if line.strip():
+                    try:
+                        cached_result = RAGIntermediateOutputs.model_validate(json.loads(line.strip()))
+                        cache[cached_result.question] = cached_result
+                    except Exception as e:
+                        logger.warning(f"Failed to load cached result: {e}")
+    
+    # Determine which questions need processing
+    questions_to_process = []
+    for question in questions:
+        if question not in cache:
+            questions_to_process.append(question)
+    
+    logger.info(f"Found {len(cache)} cached results. Processing {len(questions_to_process)} new questions.")
+    
     es_timeout = 300
     llm = VLLMChatOpenAI(
         model=openai_model,
@@ -474,37 +501,70 @@ async def run_rag_pipeline(*,
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
 
-    async with AsyncElasticsearch(
-        hosts=es_host,
-        basic_auth=es_basic_auth,
-        timeout=es_timeout
-    ) as es_client:
-        es_store = ElasticsearchStore(
-            embedding=embedding_model,
-            index_name=es_index,
-            es_url=es_host,
-            es_user=es_basic_auth[0],
-            es_password=es_basic_auth[1],
-            query_field="paragraph",
-            es_params={"timeout": es_timeout}
-        )
+    if questions_to_process:
+        async with AsyncElasticsearch(
+            hosts=es_host,
+            basic_auth=es_basic_auth,
+            timeout=es_timeout
+        ) as es_client:
+            es_store = ElasticsearchStore(
+                embedding=embedding_model,
+                index_name=es_index,
+                es_url=es_host,
+                es_user=es_basic_auth[0],
+                es_password=es_basic_auth[1],
+                query_field="paragraph",
+                es_params={"timeout": es_timeout}
+            )
 
-        builder = RAGPipelineBuilder(
-            llm=llm,
-            tokenizer=tokenizer,
-            store=es_store,
-            es_client=es_client,
-            es_collection=es_index,
-        )           
-        chain = builder.build_chain(do_planning=do_planning, do_reranking=do_reranking, 
-                                    do_vector_search=do_vector_search, do_full_text_search=do_full_text_search)
-        
-        final_states = await chain.abatch(inputs=[
-            RAGIntermediateOutputs(question=question) 
-            for question in questions
-        ])
-        
-        final_states = [RAGIntermediateOutputs.model_validate(final_state) for final_state in final_states]
+            builder = RAGPipelineBuilder(
+                llm=llm,
+                tokenizer=tokenizer,
+                store=es_store,
+                es_client=es_client,
+                es_collection=es_index,
+            )           
+            chain = builder.build_chain(do_planning=do_planning, do_reranking=do_reranking, 
+                                        do_vector_search=do_vector_search, do_full_text_search=do_full_text_search)
+            
+            # Setup progress bar
+            pbar = tqdm(total=len(questions_to_process), desc="Processing questions")
+            
+            # Process uncached questions
+            gen = chain.abatch_as_completed(
+                inputs=[
+                    RAGIntermediateOutputs(question=question) 
+                    for question in questions_to_process
+                ], 
+                config=RunnableConfig(max_concurrency=max_concurrency)
+            )
+            
+            # File to append results as they come in
+            if cache_file:
+                cache_dir = os.path.dirname(cache_file)
+                os.makedirs(cache_dir, exist_ok=True)
+            
+            async for final_state in gen:
+                # Validate and add to cache
+                result = RAGIntermediateOutputs.model_validate(final_state)
+                cache[result.question] = result
+                
+                # Write to cache file
+                if cache_file:
+                    with open(cache_file, 'a') as f:
+                        f.write(json.dumps(result.model_dump(exclude={"error"})) + '\n')
+                
+                # Update progress bar
+                pbar.update(1)
+            
+            pbar.close()
+    
+    # Reorder results to match input questions
+    final_states = []
+    for question in questions:
+        if question not in cache:
+            logger.error(f"Question not found in results: {question}")
+        final_states.append(cache[question])
     
     return final_states
 
