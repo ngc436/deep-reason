@@ -1,5 +1,8 @@
-from deep_reason.topic_modeling import extract_topics_from_documents, visualize_topics
+from deep_reason.topic_modeling import extract_topics_from_documents
 from deep_reason.utils import load_obliqa_dataset
+import os
+import json
+from datetime import datetime
 
 chunks = load_obliqa_dataset(obliqa_dir="datasets/ObliQA/StructuredRegulatoryDocuments")
 documents = [chunk.text for chunk in chunks]
@@ -18,7 +21,9 @@ documents = [chunk.text for chunk in chunks]
 
 # Extract topics with a smaller minimum topic size
 print("Processing documents and extracting topics...")
-result = extract_topics_from_documents(documents, min_topic_size=2)  # Reduced from default 10
+result = extract_topics_from_documents(documents, 
+                                       n_topics=100,
+                                       min_topic_size=2)  # Reduced from default 10
 
 # Print topic information from the model
 print("\nDetailed Topic Information:")
@@ -64,3 +69,40 @@ for topic_id, topic_docs in docs_by_topic.items():
             truncated_doc = doc[:70] + "..." if len(doc) > 70 else doc
             print(f"  {i}. {truncated_doc}")
         print() 
+
+# print words of topics
+for topic_id, words in result["topic_representations"].items():
+    print(f"Topic {topic_id}: {words}")
+
+print(result["model"].get_document_info(documents)['Top_n_words'])
+
+# Create output directory
+output_dir = "topic_model_output"
+os.makedirs(output_dir, exist_ok=True)
+
+# Generate timestamp for unique filenames
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+# Save topic information to JSON
+topic_output = {
+    "topic_info": result["topic_info"].to_dict() if hasattr(result["topic_info"], 'to_dict') else result["topic_info"],
+    "topic_representations": result["topic_representations"],
+    "document_info": result["document_info"],
+    "topic_distribution": {
+        str(topic): count for topic, count in topic_counts.items() if topic != -1
+    }
+}
+
+with open(os.path.join(output_dir, f"topic_results_{timestamp}.json"), "w") as f:
+    json.dump(topic_output, f, indent=2)
+
+# Save documents by topic to text file
+with open(os.path.join(output_dir, f"documents_by_topic_{timestamp}.txt"), "w") as f:
+    for topic_id, topic_docs in docs_by_topic.items():
+        if topic_id != -1:  # Skip outliers
+            f.write(f"Topic {topic_id} - {result['topic_representations'].get(topic_id, [('Unknown', 1)])[0][0]}:\n")
+            for i, doc in enumerate(topic_docs, 1):
+                f.write(f"  {i}. {doc}\n")
+            f.write("\n")
+
+print(f"\nResults have been saved to the '{output_dir}' directory.")

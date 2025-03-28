@@ -42,7 +42,7 @@ To ask a question, run:
 drctl rag ask --question='<question>' --es-index="<index-name>"
 ```
 
-You may put all questions in a file and ask them in a batch:
+You may put all questions in a file (questions in JSON format [{'question': '...'}, ...]) and ask them in a batch:
 ```bash
 drctl rag ask-many --questions-path="<path to file with questions>" --output-path="<path to file to save answers>" --es-index="<index-name>"
 ```

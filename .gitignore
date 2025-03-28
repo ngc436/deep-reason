@@ -175,6 +175,7 @@ datasets/
 
 # Deep Reason
 kg_output/
+topic_model_output/
 examples/testraggraph/
 *.orig
 .ruff_cache/

@@ -1,18 +1,19 @@
 import bertopic
 import os
 import numpy as np
-from typing import List, Dict, Union, Optional
+from typing import List, Dict, Optional
 from bertopic import BERTopic
 from bertopic.representation import OpenAI
 import openai
-from sentence_transformers import SentenceTransformer
 from umap import UMAP
 from hdbscan import HDBSCAN
 from sklearn.feature_extraction.text import CountVectorizer
 
 # Configure the embedding model - qwen embeddings
 class QwenEmbeddings:
-    def __init__(self, api_base="http://d.dgx:8029/v1", api_key="token-abc123"):
+    def __init__(self, 
+                 api_base="http://d.dgx:8029/v1", 
+                 api_key="token-abc123"):
         self.client = openai.OpenAI(
             base_url=api_base,
             api_key=api_key
