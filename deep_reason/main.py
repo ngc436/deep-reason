@@ -17,7 +17,9 @@ def cli():
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)", 
-        datefmt="%Y-%m-%d %H:%M:%S"
+        datefmt="%Y-%m-%d %H:%M:%S",
+        filename="rag.log",
+        filemode="a"
     )
 ######################################################
 @cli.group()
@@ -71,7 +73,7 @@ def ask(question: str,
 
 
 @rag.command()
-@click.option("--questions-path", type=str, required=True, help="Path to a file with questions in JSON format [{'question': '...'}, ...]")
+@click.option("--questions-path", type=str, required=True, default="questions.json", help="Path to a file with questions in JSON format [{'question': '...'}, ...]")
 @click.option("--output-path", type=str, required=True, default="answers.json", help="Path to a file to save the answers in JSON format")
 @click.option("--tokenizer-path", type=str, default="resources/qwen2-72b-model-tokenizer", help="Tokenizer path")
 @click.option("--es-index", type=str, default="test", help="Elasticsearch index")
@@ -87,19 +89,24 @@ def ask(question: str,
 @click.option("--do-full-text-search", type=bool, default=True, help="Do full text search")
 @click.option("--do-planning", type=bool, default=True, help="Do planning")
 @click.option("--do-reranking", type=bool, default=True, help="Do reranking")
+@click.option("--max-concurrency", type=int, default=100, help="Max concurrency")
+@click.option("--cache-file", type=str, default="cache.json", help="Cache file")
+@click.option("--no-cache", is_flag=True, default=False, help="Overwrite cache")
 def ask_many(questions_path: str, output_path: str, 
              tokenizer_path: str,
              es_index: str, es_host: str, es_basic_auth: str, 
              openai_model: str, openai_base_url: str, openai_api_key: str, 
              embedding_model: str, embedding_base_url: str, embedding_api_key: str,
-             do_vector_search: bool, do_full_text_search: bool, do_planning: bool, do_reranking: bool):
+             do_vector_search: bool, do_full_text_search: bool, do_planning: bool, do_reranking: bool,
+             max_concurrency: int, cache_file: Optional[str], no_cache: bool):
     logger.info(f"Computing answers for questions from {questions_path}")
 
     questions = pd.read_json(questions_path)["question"].tolist()
     
     es_basic_auth = parse_basic_auth(es_basic_auth)
 
-    
+    cache_file = None if no_cache else cache_file
+
     final_states = asyncio.run(
         run_rag_pipeline(
             questions=questions,
@@ -116,7 +123,9 @@ def ask_many(questions_path: str, output_path: str,
             do_vector_search=do_vector_search,
             do_full_text_search=do_full_text_search,
             do_planning=do_planning,
-            do_reranking=do_reranking
+            do_reranking=do_reranking,
+            max_concurrency=max_concurrency,
+            cache_file=cache_file,
         )
     )
 

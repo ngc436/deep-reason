@@ -181,3 +181,7 @@ examples/testraggraph/
 .ruff_cache/
 requirements.txt
 
+# products of rag 'ask-many command
+questions.json
+answers.json
+cache.json  
