@@ -32,15 +32,15 @@ run_cli() {
             echo "Starting container ${CONTAINER_NAME}"
             docker start ${CONTAINER_NAME}
         fi
-        # Attach to the running container
+        # Attach to the running container with -d option to keep it running in background
         docker exec -it ${CONTAINER_NAME} /bin/bash
     else
-        # Run a new container
+        # Run a new container with -d flag to run in detached mode
         echo "Creating and running new container ${CONTAINER_NAME}"
-        docker run -it --name ${CONTAINER_NAME} \
+        docker run -itd --name ${CONTAINER_NAME} \
             -v $(pwd)/graphs/${DATA_FOLDER}:/data \
             ${image_name} \
-            /bin/bash
+            tail -f /dev/null  # Keep container running
     fi
 }
 

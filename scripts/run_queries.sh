@@ -10,9 +10,11 @@ MAGENTA='\033[0;35m'
 BOLD='\033[1m'
 RESET='\033[0m'
 
-# Default paths
+# Add log file path near the top with other defaults
+DEFAULT_LOG_FILE="query_processing.log"
 DEFAULT_JSON_FILE="datasets/ObliQA/ObliQA_train_filtered_doc1.json"
 DEFAULT_OUTPUT_CSV="query.csv"
+DEFAULT_MAX_CONCURRENT=20  # Default number of concurrent processes
 
 # Check for required commands
 check_command() {
@@ -44,6 +46,15 @@ check_command "graphrag"
 # Parse command line arguments
 JSON_FILE=${1:-$DEFAULT_JSON_FILE}
 OUTPUT_CSV=${2:-$DEFAULT_OUTPUT_CSV}
+LOG_FILE=${3:-$DEFAULT_LOG_FILE}
+MAX_CONCURRENT=${4:-$DEFAULT_MAX_CONCURRENT}
+
+# Modify the script to write to both console and log file
+exec 1> >(tee -a "$LOG_FILE")
+exec 2>&1
+
+# Add timestamp to log entries
+echo "=== Query Processing Started at $(date) ===" >> "$LOG_FILE"
 
 # Verify JSON file exists
 if [ ! -f "$JSON_FILE" ]; then
@@ -56,15 +67,25 @@ fi
 echo -e "${CYAN}${BOLD}=== Query Processing Setup ===${RESET}"
 echo -e "${CYAN}Using JSON file:${RESET} $JSON_FILE"
 echo -e "${CYAN}Results will be saved to:${RESET} $OUTPUT_CSV"
+echo -e "${CYAN}Log file:${RESET} $LOG_FILE"
+echo -e "${CYAN}Max concurrent queries:${RESET} $MAX_CONCURRENT"
 echo -e "${CYAN}${BOLD}===============================${RESET}\n"
 
 # Create or clear the output CSV file
 echo "question_id,question,result" > "$OUTPUT_CSV"
 
-# Extract all questions from the JSON file and process each one
-echo -e "${CYAN}${BOLD}=== Starting Query Processing ===${RESET}\n"
+# Add before the main processing loop
+# Create a temporary directory for managing concurrent processes
+TEMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TEMP_DIR"' EXIT
+SEMAPHORE="$TEMP_DIR/semaphore"
+mkdir "$SEMAPHORE"
 
-jq -r '.Question | to_entries[] | [.key, .value] | @tsv' "$JSON_FILE" | while IFS=$'\t' read -r id question; do
+# Function to process a single query
+process_query() {
+    local id="$1"
+    local question="$2"
+    
     echo -e "${MAGENTA}Processing question ID:${RESET} ${BOLD}$id${RESET}"
     echo -e "${BLUE}Question:${RESET} ${BLUE}$question${RESET}"
     
@@ -82,12 +103,35 @@ jq -r '.Question | to_entries[] | [.key, .value] | @tsv' "$JSON_FILE" | while IF
     escaped_result=$(echo "$result" | sed 's/"/""/g' | sed ':a;N;$!ba;s/\n/\\n/g')
     escaped_question=$(echo "$question" | sed 's/"/""/g' | sed ':a;N;$!ba;s/\n/\\n/g')
     
-    # Append the result to the CSV file
-    echo "\"$id\",\"$escaped_question\",\"$escaped_result\"" >> "$OUTPUT_CSV"
+    # Append the result to the CSV file (using flock for thread safety)
+    flock "$OUTPUT_CSV" bash -c "echo \"$id\",\"$escaped_question\",\"$escaped_result\" >> \"$OUTPUT_CSV\""
     
     echo -e "${CYAN}Result saved for question ID:${RESET} ${BOLD}$id${RESET}"
     echo -e "${MAGENTA}${BOLD}---------------------------------${RESET}\n"
+}
+
+# Replace the main processing loop with this async version
+echo -e "${CYAN}${BOLD}=== Starting Async Query Processing (Max concurrent: $MAX_CONCURRENT) ===${RESET}\n"
+
+jq -r '.Question | to_entries[] | [.key, .value] | @tsv' "$JSON_FILE" | while IFS=$'\t' read -r id question; do
+    # Wait for a free slot
+    while [ $(ls "$SEMAPHORE" | wc -l) -ge $MAX_CONCURRENT ]; do
+        sleep 1
+    done
+    
+    # Create a slot marker
+    touch "$SEMAPHORE/$id"
+    
+    # Process the query in background
+    (
+        process_query "$id" "$question"
+        rm "$SEMAPHORE/$id"
+    ) &
 done
+
+# Wait for all background processes to complete
+echo -e "${CYAN}Waiting for remaining queries to complete...${RESET}"
+wait
 
 echo -e "${CYAN}${BOLD}=== Processing Complete ===${RESET}"
 echo -e "${GREEN}${BOLD}All queries processed. Results saved to $OUTPUT_CSV${RESET}\n"
@@ -95,10 +139,10 @@ echo -e "${GREEN}${BOLD}All queries processed. Results saved to $OUTPUT_CSV${RES
 # Usage information
 cat << EOF
 ${YELLOW}${BOLD}Usage:${RESET}
-  ./$(basename "$0") [JSON_FILE] [OUTPUT_CSV]
+  ./$(basename "$0") [JSON_FILE] [OUTPUT_CSV] [LOG_FILE] [MAX_CONCURRENT]
 
 ${YELLOW}${BOLD}Examples:${RESET}
   ./$(basename "$0")                                               # Use default paths
-  ./$(basename "$0") datasets/ObliQA/ObliQA_train_filtered_doc1.json query.csv  # Specify both paths
-  ./$(basename "$0") custom_questions.json                         # Specify only JSON file, use default CSV
+  ./$(basename "$0") datasets/ObliQA/ObliQA_train_filtered_doc1.json query.csv  # Specify paths
+  ./$(basename "$0") custom_questions.json query.csv logs.txt 10   # Run with 10 concurrent queries
 EOF

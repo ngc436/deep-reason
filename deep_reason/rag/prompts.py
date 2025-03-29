@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate
 
 keywords_extraction_prompt_template = ChatPromptTemplate.from_messages(
     [
