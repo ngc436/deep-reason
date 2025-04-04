@@ -17,6 +17,10 @@ function show_usage {
     echo "  --python-version VERSION  Override Python version (e.g., 3.10)"
 }
 
+function run_build_image {
+    docker run -it -v $(pwd):/src poetry:py3.12 /bin/bash
+}
+
 function prepare_dist {
     echo "Exporting requirements..."
     poetry export --without-hashes --without-urls > requirements.txt
@@ -78,6 +82,9 @@ function main {
         prepare-dist)
             prepare_dist
             ;;
+	run-build-image)
+	    run_build_image
+	    ;;
         build-image)
             shift  # Remove the command name
             build_image "$@"
