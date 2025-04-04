@@ -1,4 +1,3 @@
-import bertopic
 import os
 import numpy as np
 from typing import List, Dict, Optional

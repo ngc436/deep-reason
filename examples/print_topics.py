@@ -1,4 +1,4 @@
-from deep_reason.topic_modeling import extract_topics_from_documents
+from deep_reason.topic_modeling.topic_modeling import extract_topics_from_documents
 from deep_reason.utils import load_obliqa_dataset
 import os
 import json
