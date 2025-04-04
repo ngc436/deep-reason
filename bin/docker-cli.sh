@@ -12,6 +12,9 @@ function show_usage {
     echo "  build-image   Build the Docker image"
     echo "  push         Push the built Docker image to the registry"
     echo "  help         Show this help message"
+    echo ""
+    echo "Options for build-image:"
+    echo "  --python-version VERSION  Override Python version (e.g., 3.10)"
 }
 
 function prepare_dist {
@@ -25,9 +28,35 @@ function prepare_dist {
 }
 
 function build_image {
-    echo "Building Docker image: $IMAGE_NAME"
+    local python_version="3.12"
+    local dockerfile_path="./docker/deep-reason.dockerfile"
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --python-version)
+                python_version="$2"
+                shift 2
+                ;;
+            *)
+                echo "Unknown option: $1"
+                show_usage
+                exit 1
+                ;;
+        esac
+    done
+    
+    echo "Building Docker image: $IMAGE_NAME with Python $python_version"
     package_version=$(poetry version -s)
-    docker build --build-arg "PACKAGE_VERSION=${package_version}" -t "$IMAGE_NAME" -f ./docker/deep-reason.dockerfile .
+    
+    # Create a temporary Dockerfile with the specified Python version
+    temp_dockerfile=$(mktemp)
+    sed "s/FROM python:.*/FROM python:${python_version}-bookworm/" "$dockerfile_path" > "$temp_dockerfile"
+    
+    docker build --build-arg "PACKAGE_VERSION=${package_version}" -t "$IMAGE_NAME" -f "$temp_dockerfile" .
+    
+    # Clean up temporary file
+    rm "$temp_dockerfile"
     
     echo "Build completed successfully!"
 }
@@ -50,7 +79,8 @@ function main {
             prepare_dist
             ;;
         build-image)
-            build_image
+            shift  # Remove the command name
+            build_image "$@"
             ;;
         push)
             push_image
