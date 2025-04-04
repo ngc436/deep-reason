@@ -2,6 +2,7 @@ import logging
 import json
 import os
 from tqdm.asyncio import tqdm
+import asyncio
 
 from typing import Annotated, Tuple
 from typing import Any
@@ -560,29 +561,38 @@ async def run_rag_pipeline(*,
             
             logger.info(f"Starting batch processing with max_concurrency={max_concurrency}")
             processed_count = 0
-            async for _, final_state in chain.abatch_as_completed(
-                inputs=[
-                    RAGIntermediateOutputs(question=question) 
-                    for question in questions_to_process
-                ], 
-                config=RunnableConfig(max_concurrency=max_concurrency)
-            ):
-                # Validate and add to cache
-                result = RAGIntermediateOutputs.model_validate(final_state)
-                cache[result.question] = result
-                processed_count += 1
-                
-                # Write to cache file
-                if cache_file:
-                    with open(cache_file, 'a') as f:
-                        f.write(json.dumps(result.model_dump(exclude={"error"})) + '\n')
-                
-                # Update progress bar
-                pbar.update(1)
-                
-                # Log progress every 10 questions
-                if processed_count % 10 == 0 or processed_count == len(questions_to_process):
-                    logger.info(f"Processed {processed_count}/{len(questions_to_process)} questions")
+            
+            # Create a list to store all tasks
+            tasks = []
+            for question in questions_to_process:
+                task = chain.ainvoke(
+                    RAGIntermediateOutputs(question=question),
+                    config=RunnableConfig(max_concurrency=max_concurrency)
+                )
+                tasks.append(task)
+            
+            # Process all tasks concurrently
+            for completed_task in asyncio.as_completed(tasks):
+                try:
+                    final_state = await completed_task
+                    # Validate and add to cache
+                    result = RAGIntermediateOutputs.model_validate(final_state)
+                    cache[result.question] = result
+                    processed_count += 1
+                    
+                    # Write to cache file
+                    if cache_file:
+                        with open(cache_file, 'a') as f:
+                            f.write(json.dumps(result.model_dump(exclude={"error"})) + '\n')
+                    
+                    # Update progress bar
+                    pbar.update(1)
+                    
+                    # Log progress every 10 questions
+                    if processed_count % 10 == 0 or processed_count == len(questions_to_process):
+                        logger.info(f"Processed {processed_count}/{len(questions_to_process)} questions")
+                except Exception as e:
+                    logger.error(f"Error processing task: {str(e)}", exc_info=True)
             
             pbar.close()
             logger.info(f"Completed processing {processed_count} questions")
