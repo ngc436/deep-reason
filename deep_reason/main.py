@@ -13,14 +13,33 @@ logger = logging.getLogger(__name__)
 
 
 @click.group()  
-def cli():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)", 
-        datefmt="%Y-%m-%d %H:%M:%S",
-        filename="rag.log",
-        filemode="a"
+@click.option("--verbose", is_flag=True, default=False, help="Enable verbose logging to console")
+def cli(verbose: bool):
+    # Configure logging to file
+    file_handler = logging.FileHandler("rag.log", mode="a")
+    file_handler.setLevel(logging.INFO)
+    file_formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)", 
+        datefmt="%Y-%m-%d %H:%M:%S"
     )
+    file_handler.setFormatter(file_formatter)
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(file_handler)
+    
+    # Add console handler if verbose is enabled
+    if verbose:
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        console_formatter = logging.Formatter(
+            "%(asctime)s [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+        console_handler.setFormatter(console_formatter)
+        root_logger.addHandler(console_handler)
+        logger.info("Verbose logging enabled")
 ######################################################
 @cli.group()
 def rag():
@@ -100,43 +119,59 @@ def ask_many(questions_path: str, output_path: str,
              do_vector_search: bool, do_full_text_search: bool, do_planning: bool, do_reranking: bool,
              max_concurrency: int, cache_file: Optional[str], no_cache: bool):
     logger.info(f"Computing answers for questions from {questions_path}")
+    logger.info(f"Output will be saved to {output_path}")
+    logger.info(f"Configuration: vector_search={do_vector_search}, full_text_search={do_full_text_search}, planning={do_planning}, reranking={do_reranking}")
+    logger.info(f"Max concurrency: {max_concurrency}")
+    logger.info(f"Cache file: {cache_file if not no_cache else 'None (no-cache enabled)'}")
 
-    questions = pd.read_json(questions_path)["question"].tolist()
-    
-    es_basic_auth = parse_basic_auth(es_basic_auth)
+    try:
+        logger.info(f"Reading questions from {questions_path}")
+        questions = pd.read_json(questions_path)["question"].tolist()
+        logger.info(f"Loaded {len(questions)} questions")
+        
+        es_basic_auth = parse_basic_auth(es_basic_auth)
+        logger.info(f"Parsed Elasticsearch basic auth: username={es_basic_auth[0]}")
 
-    cache_file = None if no_cache else cache_file
+        cache_file = None if no_cache else cache_file
+        if cache_file:
+            logger.info(f"Will use cache file: {cache_file}")
+        else:
+            logger.info("No cache file will be used")
 
-    final_states = asyncio.run(
-        run_rag_pipeline(
-            questions=questions,
-            tokenizer_path=tokenizer_path,
-            es_index=es_index,
-            es_host=es_host,
-            es_basic_auth=es_basic_auth,
-            openai_model=openai_model,
-            openai_base_url=openai_base_url,
-            openai_api_key=openai_api_key,
-            embedding_model=embedding_model,
-            embedding_base_url=embedding_base_url,
-            embedding_api_key=embedding_api_key,
-            do_vector_search=do_vector_search,
-            do_full_text_search=do_full_text_search,
-            do_planning=do_planning,
-            do_reranking=do_reranking,
-            max_concurrency=max_concurrency,
-            cache_file=cache_file,
+        logger.info("Starting RAG pipeline")
+        final_states = asyncio.run(
+            run_rag_pipeline(
+                questions=questions,
+                tokenizer_path=tokenizer_path,
+                es_index=es_index,
+                es_host=es_host,
+                es_basic_auth=es_basic_auth,
+                openai_model=openai_model,
+                openai_base_url=openai_base_url,
+                openai_api_key=openai_api_key,
+                embedding_model=embedding_model,
+                embedding_base_url=embedding_base_url,
+                embedding_api_key=embedding_api_key,
+                do_vector_search=do_vector_search,
+                do_full_text_search=do_full_text_search,
+                do_planning=do_planning,
+                do_reranking=do_reranking,
+                max_concurrency=max_concurrency,
+                cache_file=cache_file,
+            )
         )
-    )
+        logger.info(f"RAG pipeline completed. Processing {len(final_states)} results")
 
-    logger.info(f"Answers successfully computed. Writing to {output_path}")
+        logger.info(f"Answers successfully computed. Writing to {output_path}")
+        answers = [final_state.model_dump_json() for final_state in final_states]
 
-    answers = [final_state.model_dump_json() for final_state in final_states]
+        with open(output_path, "w") as f:
+            f.write("\n".join(answers))
 
-    with open(output_path, "w") as f:
-        f.write("\n".join(answers))
-
-    logger.info(f"Answers saved to {output_path}")
+        logger.info(f"Answers saved to {output_path}")
+    except Exception as e:
+        logger.error(f"Error in ask_many: {str(e)}", exc_info=True)
+        raise
 
 
 ######################################################

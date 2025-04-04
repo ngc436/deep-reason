@@ -463,11 +463,17 @@ async def run_rag_pipeline(*,
                            do_planning: bool = True, do_reranking: bool = True,
                            max_concurrency: int = 100,
                            cache_file: Optional[str] = None) -> List[RAGIntermediateOutputs]:
+    logger.info(f"Starting RAG pipeline with {len(questions)} questions")
+    logger.info(f"Configuration: vector_search={do_vector_search}, full_text_search={do_full_text_search}, planning={do_planning}, reranking={do_reranking}")
+    logger.info(f"Max concurrency: {max_concurrency}")
+    logger.info(f"Cache file: {cache_file}")
+    
     # Initialize cache dictionary
     cache = {}
     
     # Load existing cache if file exists
     if cache_file and os.path.exists(cache_file):
+        logger.info(f"Loading cache from {cache_file}")
         with open(cache_file, 'r') as f:
             for line in f:
                 if line.strip():
@@ -485,28 +491,41 @@ async def run_rag_pipeline(*,
     
     logger.info(f"Found {len(cache)} cached results. Processing {len(questions_to_process)} new questions.")
     
+    if not questions_to_process:
+        logger.info("No new questions to process. Returning cached results.")
+        return [cache[q] for q in questions]
+    
+    logger.info("Initializing models and connections...")
     es_timeout = 300
-    llm = VLLMChatOpenAI(
-        model=openai_model,
-        base_url=openai_base_url,
-        api_key=openai_api_key,
-        temperature=0.01,
-        max_tokens=2048,
-    )
-    embedding_model = OpenAIEmbeddings(
-        model=embedding_model,
-        base_url=embedding_base_url,
-        api_key=embedding_api_key,
-    )
+    try:
+        logger.info(f"Initializing LLM with model={openai_model}, base_url={openai_base_url}")
+        llm = VLLMChatOpenAI(
+            model=openai_model,
+            base_url=openai_base_url,
+            api_key=openai_api_key,
+            temperature=0.01,
+            max_tokens=2048,
+        )
+        logger.info(f"Initializing embedding model with model={embedding_model}, base_url={embedding_base_url}")
+        embedding_model = OpenAIEmbeddings(
+            model=embedding_model,
+            base_url=embedding_base_url,
+            api_key=embedding_api_key,
+        )
 
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+        logger.info(f"Loading tokenizer from {tokenizer_path}")
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+        logger.info("Tokenizer loaded successfully")
 
-    if questions_to_process:
+        logger.info(f"Connecting to Elasticsearch at {es_host}")
         async with AsyncElasticsearch(
             hosts=es_host,
             basic_auth=es_basic_auth,
             timeout=es_timeout
         ) as es_client:
+            logger.info("Connected to Elasticsearch successfully")
+            
+            logger.info(f"Initializing ElasticsearchStore with index={es_index}")
             es_store = ElasticsearchStore(
                 embedding=embedding_model,
                 index_name=es_index,
@@ -516,7 +535,9 @@ async def run_rag_pipeline(*,
                 query_field="paragraph",
                 es_params={"timeout": es_timeout}
             )
+            logger.info("ElasticsearchStore initialized successfully")
 
+            logger.info("Building RAG pipeline chain")
             builder = RAGPipelineBuilder(
                 llm=llm,
                 tokenizer=tokenizer,
@@ -526,6 +547,7 @@ async def run_rag_pipeline(*,
             )           
             chain = builder.build_chain(do_planning=do_planning, do_reranking=do_reranking, 
                                         do_vector_search=do_vector_search, do_full_text_search=do_full_text_search)
+            logger.info("RAG pipeline chain built successfully")
             
             # Setup progress bar
             pbar = tqdm(total=len(questions_to_process), desc="Processing questions") 
@@ -534,7 +556,10 @@ async def run_rag_pipeline(*,
             if cache_file:
                 cache_dir = os.path.dirname(os.path.abspath(cache_file))
                 os.makedirs(cache_dir, exist_ok=True)
+                logger.info(f"Will save results to cache file: {cache_file}")
             
+            logger.info(f"Starting batch processing with max_concurrency={max_concurrency}")
+            processed_count = 0
             async for _, final_state in chain.abatch_as_completed(
                 inputs=[
                     RAGIntermediateOutputs(question=question) 
@@ -545,6 +570,7 @@ async def run_rag_pipeline(*,
                 # Validate and add to cache
                 result = RAGIntermediateOutputs.model_validate(final_state)
                 cache[result.question] = result
+                processed_count += 1
                 
                 # Write to cache file
                 if cache_file:
@@ -553,15 +579,25 @@ async def run_rag_pipeline(*,
                 
                 # Update progress bar
                 pbar.update(1)
+                
+                # Log progress every 10 questions
+                if processed_count % 10 == 0 or processed_count == len(questions_to_process):
+                    logger.info(f"Processed {processed_count}/{len(questions_to_process)} questions")
             
             pbar.close()
+            logger.info(f"Completed processing {processed_count} questions")
+    except Exception as e:
+        logger.error(f"Error in RAG pipeline: {str(e)}", exc_info=True)
+        raise
     
     # Reorder results to match input questions
+    logger.info("Reordering results to match input questions")
     final_states = []
     for question in questions:
         if question not in cache:
             logger.error(f"Question not found in results: {question}")
         final_states.append(cache[question])
     
+    logger.info(f"RAG pipeline completed. Returning {len(final_states)} results")
     return final_states
 
