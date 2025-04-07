@@ -3,6 +3,7 @@ import json
 import os
 from tqdm.asyncio import tqdm
 import asyncio
+import time
 
 from typing import Annotated, Tuple
 from typing import Any
@@ -507,12 +508,31 @@ async def run_rag_pipeline(*,
             temperature=0.01,
             max_tokens=2048,
         )
+        
+        # Test LLM availability
+        logger.info("Testing LLM availability...")
+        try:
+            test_response = await llm.ainvoke("Test message")
+            logger.info("LLM is available and responding")
+        except Exception as e:
+            logger.error(f"LLM is not available: {str(e)}")
+            raise
+
         logger.info(f"Initializing embedding model with model={embedding_model}, base_url={embedding_base_url}")
         embedding_model = OpenAIEmbeddings(
             model=embedding_model,
             base_url=embedding_base_url,
             api_key=embedding_api_key,
         )
+        
+        # Test embedding model availability
+        logger.info("Testing embedding model availability...")
+        try:
+            test_embedding = await embedding_model.aembed_query("Test message")
+            logger.info("Embedding model is available and responding")
+        except Exception as e:
+            logger.error(f"Embedding model is not available: {str(e)}")
+            raise
 
         logger.info(f"Loading tokenizer from {tokenizer_path}")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
@@ -524,7 +544,14 @@ async def run_rag_pipeline(*,
             basic_auth=es_basic_auth,
             timeout=es_timeout
         ) as es_client:
-            logger.info("Connected to Elasticsearch successfully")
+            # Test Elasticsearch connection
+            logger.info("Testing Elasticsearch connection...")
+            try:
+                health = await es_client.cluster.health()
+                logger.info(f"Elasticsearch is available. Cluster health: {health}")
+            except Exception as e:
+                logger.error(f"Elasticsearch is not available: {str(e)}")
+                raise
             
             logger.info(f"Initializing ElasticsearchStore with index={es_index}")
             es_store = ElasticsearchStore(
@@ -568,22 +595,27 @@ async def run_rag_pipeline(*,
             # Create a list to store all tasks
             tasks = []
             logger.info(f"Creating {len(questions_to_process)} tasks for processing")
+            start_time = time.time()
             for i, question in enumerate(questions_to_process):
                 if i % 100 == 0:
-                    logger.info(f"Creating task {i}/{len(questions_to_process)}")
+                    elapsed = time.time() - start_time
+                    logger.info(f"Creating task {i}/{len(questions_to_process)} (elapsed time: {elapsed:.2f}s)")
                 task = chain.ainvoke(
                     RAGIntermediateOutputs(question=question),
                     config=RunnableConfig(max_concurrency=max_concurrency)
                 )
                 tasks.append(task)
             
-            logger.info(f"Created all {len(tasks)} tasks, starting processing")
+            task_creation_time = time.time() - start_time
+            logger.info(f"Created all {len(tasks)} tasks in {task_creation_time:.2f}s, starting processing")
             
             # Process all tasks concurrently
+            processing_start_time = time.time()
             for i, completed_task in enumerate(asyncio.as_completed(tasks)):
                 try:
                     if i % 10 == 0:
-                        logger.info(f"Processing task {i}/{len(tasks)}")
+                        elapsed = time.time() - processing_start_time
+                        logger.info(f"Processing task {i}/{len(tasks)} (elapsed time: {elapsed:.2f}s)")
                     final_state = await completed_task
                     # Validate and add to cache
                     result = RAGIntermediateOutputs.model_validate(final_state)
@@ -600,7 +632,8 @@ async def run_rag_pipeline(*,
                     
                     # Log progress every 10 questions
                     if processed_count % 10 == 0 or processed_count == len(questions_to_process):
-                        logger.info(f"Processed {processed_count}/{len(questions_to_process)} questions")
+                        elapsed = time.time() - processing_start_time
+                        logger.info(f"Processed {processed_count}/{len(questions_to_process)} questions (elapsed time: {elapsed:.2f}s)")
                 except Exception as e:
                     logger.error(f"Error processing task {i}: {str(e)}", exc_info=True)
                     logger.error(f"Failed question: {questions_to_process[i]}")
