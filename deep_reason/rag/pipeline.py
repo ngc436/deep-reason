@@ -483,7 +483,24 @@ async def run_rag_pipeline(*,
             for line in f:
                 if line.strip():
                     try:
-                        cached_result = RAGIntermediateOutputs.model_validate(json.loads(line.strip()))
+                        # Parse the JSON data
+                        data = json.loads(line.strip())
+                        # Create a new RAGIntermediateOutputs object with the parsed data
+                        # We need to handle the case where some fields might be missing
+                        cached_result = RAGIntermediateOutputs(
+                            question=data.get("question", ""),
+                            keywords=data.get("keywords", None),
+                            es_retrieved_documents=None,  # We don't cache these complex objects
+                            planned_queries=data.get("planned_queries", None),
+                            retrieved_documents=None,  # We don't cache these complex objects
+                            context_documents=None,  # We don't cache these complex objects
+                            reranked_documents=None,  # We don't cache these complex objects
+                            reranker_answers=data.get("reranker_answers", None),
+                            reranker_scores=data.get("reranker_scores", None),
+                            answer_context=data.get("answer_context", None),
+                            answer=data.get("answer", None),
+                            error=None
+                        )
                         cache[cached_result.question] = cached_result
                     except Exception as e:
                         logger.warning(f"Failed to load cached result: {e}")
@@ -624,7 +641,18 @@ async def run_rag_pipeline(*,
                             # Write to cache file
                             if cache_file:
                                 with open(cache_file, 'a') as f:
-                                    f.write(json.dumps(result.model_dump(exclude={"error"})) + '\n')
+                                    # Convert to a serializable format, handling non-serializable types
+                                    serializable_data = result.model_dump(exclude={"error"})
+                                    # Ensure all values are JSON serializable
+                                    for key, value in serializable_data.items():
+                                        if isinstance(value, (Document, AIMessage)):
+                                            serializable_data[key] = str(value)
+                                        elif isinstance(value, list):
+                                            serializable_data[key] = [
+                                                str(item) if isinstance(item, (Document, AIMessage)) else item
+                                                for item in value
+                                            ]
+                                    f.write(json.dumps(serializable_data) + '\n')
                             
                             # Update progress bar
                             pbar.update(1)
@@ -684,8 +712,10 @@ async def run_rag_pipeline(*,
             # Create a placeholder result for failed questions
             placeholder = RAGIntermediateOutputs(
                 question=question,
-                error=Exception(f"Failed to process question: {question[:50]}...")
+                error=None  # We can't serialize Exception objects, so set to None
             )
+            # Add a note in the answer field to indicate failure
+            placeholder.answer = f"Failed to process this question due to resource limitations or timeouts."
             final_states.append(placeholder)
         else:
             final_states.append(cache[question])
