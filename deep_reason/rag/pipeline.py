@@ -549,6 +549,7 @@ async def run_rag_pipeline(*,
             chain = builder.build_chain(do_planning=do_planning, do_reranking=do_reranking, 
                                         do_vector_search=do_vector_search, do_full_text_search=do_full_text_search)
             logger.info("RAG pipeline chain built successfully")
+            logger.info(f"Chain configuration: planning={do_planning}, reranking={do_reranking}, vector_search={do_vector_search}, full_text_search={do_full_text_search}")
             
             # Setup progress bar
             pbar = tqdm(total=len(questions_to_process), desc="Processing questions") 
@@ -560,20 +561,29 @@ async def run_rag_pipeline(*,
                 logger.info(f"Will save results to cache file: {cache_file}")
             
             logger.info(f"Starting batch processing with max_concurrency={max_concurrency}")
+            logger.info(f"Total questions to process: {len(questions_to_process)}")
+            logger.info(f"First question sample: {questions_to_process[0][:100]}...")
             processed_count = 0
             
             # Create a list to store all tasks
             tasks = []
-            for question in questions_to_process:
+            logger.info(f"Creating {len(questions_to_process)} tasks for processing")
+            for i, question in enumerate(questions_to_process):
+                if i % 100 == 0:
+                    logger.info(f"Creating task {i}/{len(questions_to_process)}")
                 task = chain.ainvoke(
                     RAGIntermediateOutputs(question=question),
                     config=RunnableConfig(max_concurrency=max_concurrency)
                 )
                 tasks.append(task)
             
+            logger.info(f"Created all {len(tasks)} tasks, starting processing")
+            
             # Process all tasks concurrently
-            for completed_task in asyncio.as_completed(tasks):
+            for i, completed_task in enumerate(asyncio.as_completed(tasks)):
                 try:
+                    if i % 10 == 0:
+                        logger.info(f"Processing task {i}/{len(tasks)}")
                     final_state = await completed_task
                     # Validate and add to cache
                     result = RAGIntermediateOutputs.model_validate(final_state)
@@ -592,7 +602,8 @@ async def run_rag_pipeline(*,
                     if processed_count % 10 == 0 or processed_count == len(questions_to_process):
                         logger.info(f"Processed {processed_count}/{len(questions_to_process)} questions")
                 except Exception as e:
-                    logger.error(f"Error processing task: {str(e)}", exc_info=True)
+                    logger.error(f"Error processing task {i}: {str(e)}", exc_info=True)
+                    logger.error(f"Failed question: {questions_to_process[i]}")
             
             pbar.close()
             logger.info(f"Completed processing {processed_count} questions")
