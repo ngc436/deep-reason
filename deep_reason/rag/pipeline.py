@@ -463,11 +463,14 @@ async def run_rag_pipeline(*,
                            embedding_model: str, embedding_base_url: str, embedding_api_key: str,
                            do_vector_search: bool = True, do_full_text_search: bool = True,
                            do_planning: bool = True, do_reranking: bool = True,
-                           max_concurrency: int = 100,
-                           cache_file: Optional[str] = None) -> List[RAGIntermediateOutputs]:
+                           max_concurrency: int = 20,
+                           cache_file: Optional[str] = None,
+                           batch_size: int = 100,
+                           task_timeout: int = 300,
+                           max_retries: int = 3) -> List[RAGIntermediateOutputs]:
     logger.info(f"Starting RAG pipeline with {len(questions)} questions")
     logger.info(f"Configuration: vector_search={do_vector_search}, full_text_search={do_full_text_search}, planning={do_planning}, reranking={do_reranking}")
-    logger.info(f"Max concurrency: {max_concurrency}")
+    logger.info(f"Max concurrency: {max_concurrency}, Batch size: {batch_size}, Task timeout: {task_timeout}s, Max retries: {max_retries}")
     logger.info(f"Cache file: {cache_file}")
     
     # Initialize cache dictionary
@@ -587,59 +590,87 @@ async def run_rag_pipeline(*,
                 os.makedirs(cache_dir, exist_ok=True)
                 logger.info(f"Will save results to cache file: {cache_file}")
             
-            logger.info(f"Starting batch processing with max_concurrency={max_concurrency}")
-            logger.info(f"Total questions to process: {len(questions_to_process)}")
-            logger.info(f"First question sample: {questions_to_process[0][:100]}...")
+            # Process questions in batches
             processed_count = 0
+            failed_questions = []
             
-            # Create a list to store all tasks
-            tasks = []
-            logger.info(f"Creating {len(questions_to_process)} tasks for processing")
-            start_time = time.time()
-            for i, question in enumerate(questions_to_process):
-                if i % 100 == 0:
-                    elapsed = time.time() - start_time
-                    logger.info(f"Creating task {i}/{len(questions_to_process)} (elapsed time: {elapsed:.2f}s)")
-                task = chain.ainvoke(
-                    RAGIntermediateOutputs(question=question),
-                    config=RunnableConfig(max_concurrency=max_concurrency)
-                )
-                tasks.append(task)
+            # Function to process a batch of questions with timeout and retry logic
+            async def process_batch(batch_questions):
+                nonlocal processed_count
+                tasks = []
+                
+                for question in batch_questions:
+                    task = asyncio.create_task(
+                        asyncio.wait_for(
+                            chain.ainvoke(
+                                RAGIntermediateOutputs(question=question),
+                                config=RunnableConfig(max_concurrency=max_concurrency)
+                            ),
+                            timeout=task_timeout
+                        )
+                    )
+                    tasks.append((question, task))
+                
+                results = []
+                for question, task in tasks:
+                    retries = 0
+                    while retries < max_retries:
+                        try:
+                            final_state = await task
+                            result = RAGIntermediateOutputs.model_validate(final_state)
+                            cache[result.question] = result
+                            processed_count += 1
+                            
+                            # Write to cache file
+                            if cache_file:
+                                with open(cache_file, 'a') as f:
+                                    f.write(json.dumps(result.model_dump(exclude={"error"})) + '\n')
+                            
+                            # Update progress bar
+                            pbar.update(1)
+                            
+                            results.append(result)
+                            break
+                        except asyncio.TimeoutError:
+                            retries += 1
+                            logger.warning(f"Task for question '{question[:50]}...' timed out after {task_timeout}s (attempt {retries}/{max_retries})")
+                            if retries >= max_retries:
+                                logger.error(f"Failed to process question after {max_retries} attempts: '{question[:50]}...'")
+                                failed_questions.append(question)
+                                pbar.update(1)
+                        except Exception as e:
+                            retries += 1
+                            logger.error(f"Error processing question '{question[:50]}...' (attempt {retries}/{max_retries}): {str(e)}")
+                            if retries >= max_retries:
+                                logger.error(f"Failed to process question after {max_retries} attempts: '{question[:50]}...'")
+                                failed_questions.append(question)
+                                pbar.update(1)
+                
+                return results
             
-            task_creation_time = time.time() - start_time
-            logger.info(f"Created all {len(tasks)} tasks in {task_creation_time:.2f}s, starting processing")
-            
-            # Process all tasks concurrently
-            processing_start_time = time.time()
-            for i, completed_task in enumerate(asyncio.as_completed(tasks)):
-                try:
-                    if i % 10 == 0:
-                        elapsed = time.time() - processing_start_time
-                        logger.info(f"Processing task {i}/{len(tasks)} (elapsed time: {elapsed:.2f}s)")
-                    final_state = await completed_task
-                    # Validate and add to cache
-                    result = RAGIntermediateOutputs.model_validate(final_state)
-                    cache[result.question] = result
-                    processed_count += 1
-                    
-                    # Write to cache file
-                    if cache_file:
-                        with open(cache_file, 'a') as f:
-                            f.write(json.dumps(result.model_dump(exclude={"error"})) + '\n')
-                    
-                    # Update progress bar
-                    pbar.update(1)
-                    
-                    # Log progress every 10 questions
-                    if processed_count % 10 == 0 or processed_count == len(questions_to_process):
-                        elapsed = time.time() - processing_start_time
-                        logger.info(f"Processed {processed_count}/{len(questions_to_process)} questions (elapsed time: {elapsed:.2f}s)")
-                except Exception as e:
-                    logger.error(f"Error processing task {i}: {str(e)}", exc_info=True)
-                    logger.error(f"Failed question: {questions_to_process[i]}")
+            # Process questions in batches
+            all_results = []
+            for i in range(0, len(questions_to_process), batch_size):
+                batch = questions_to_process[i:i+batch_size]
+                logger.info(f"Processing batch {i//batch_size + 1}/{(len(questions_to_process) + batch_size - 1)//batch_size} ({len(batch)} questions)")
+                batch_start_time = time.time()
+                
+                batch_results = await process_batch(batch)
+                all_results.extend(batch_results)
+                
+                batch_time = time.time() - batch_start_time
+                logger.info(f"Completed batch {i//batch_size + 1} in {batch_time:.2f}s ({len(batch_results)}/{len(batch)} successful)")
+                
+                # Add a small delay between batches to allow resources to be freed
+                if i + batch_size < len(questions_to_process):
+                    await asyncio.sleep(2)
             
             pbar.close()
             logger.info(f"Completed processing {processed_count} questions")
+            if failed_questions:
+                logger.warning(f"Failed to process {len(failed_questions)} questions")
+                logger.warning(f"Failed questions: {failed_questions[:10]}...")
+    
     except Exception as e:
         logger.error(f"Error in RAG pipeline: {str(e)}", exc_info=True)
         raise
@@ -650,7 +681,14 @@ async def run_rag_pipeline(*,
     for question in questions:
         if question not in cache:
             logger.error(f"Question not found in results: {question}")
-        final_states.append(cache[question])
+            # Create a placeholder result for failed questions
+            placeholder = RAGIntermediateOutputs(
+                question=question,
+                error=Exception(f"Failed to process question: {question[:50]}...")
+            )
+            final_states.append(placeholder)
+        else:
+            final_states.append(cache[question])
     
     logger.info(f"RAG pipeline completed. Returning {len(final_states)} results")
     return final_states
