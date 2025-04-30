@@ -8,9 +8,7 @@ from langchain_openai.embeddings import OpenAIEmbeddings
 from langchain_core.documents import Document
 import yaml
 from elasticsearch import helpers, AsyncElasticsearch
-import pandas as pd
 from tqdm.asyncio import tqdm as atqdm
-from tqdm import tqdm
 
 
 logger = logging.getLogger(__name__)
