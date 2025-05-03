@@ -2,7 +2,7 @@ import os
 import numpy as np
 from typing import List, Dict, Optional
 from bertopic import BERTopic
-from bertopic.representation import OpenAI
+from bertopic.representation import KeyBERTInspired, MaximalMarginalRelevance
 import openai
 from umap import UMAP
 from hdbscan import HDBSCAN
@@ -51,7 +51,7 @@ def create_topic_model(
     
     Args:
         embedding_model: Custom embedding model (if None, will use Qwen embeddings)
-        language_model: Custom language model (if None, will use Qwen2.5 72B)
+        language_model: Custom language model (if None, will use KeyBERT and MMR)
         n_topics: Number of topics to extract (None for automatic detection)
         min_topic_size: Minimum size of topics
         verbose: Whether to print progress information
@@ -100,25 +100,13 @@ def create_topic_model(
     # Vectorizer model
     vectorizer_model = CountVectorizer(stop_words="english")
     
-    # Configure language model for topic representation
+    # Configure representation model
     if language_model is None:
-        # Use Qwen2.5 72B for representation
-        os.environ["OPENAI_API_BASE"] = "http://10.32.2.11:8031/v1"
-        os.environ["OPENAI_API_KEY"] = "token-abc123"
-        
-        # Create an OpenAI client for the representation model
-        openai_client = openai.OpenAI(
-            base_url="http://10.32.2.11:8031/v1",
-            api_key="token-abc123"
-        )
-        
-        representation_model = OpenAI(
-            client=openai_client,
-            model="/model",  # Using Qwen2.5 72B model ()
-            chat=True,
-            top_n_words=10,
-            prompt_name="default"
-        )
+        # Use KeyBERT and MMR for representation
+        representation_model = {
+            "KeyBERT": KeyBERTInspired(),
+            "MMR": MaximalMarginalRelevance(diversity=0.5)
+        }
     else:
         representation_model = language_model
     

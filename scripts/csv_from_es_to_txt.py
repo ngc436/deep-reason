@@ -1,6 +1,5 @@
 import pandas as pd
 import os
-from pathlib import Path
 
 def convert_csv_to_txt(csv_path):
     # Read the CSV file
