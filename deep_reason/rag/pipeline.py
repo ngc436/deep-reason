@@ -323,9 +323,15 @@ class RAGPipelineBuilder:
 
         logger.info(f"Performing vector search with queries: {queries}")
 
-        docs = await retriever_chain.ainvoke(queries, config=config)
-        logger.info(f"Retrieved documents (Vector search): {len(docs)}")
-        return state.copy(update={"retrieved_documents": docs})
+        # Ensure we're properly awaiting the coroutine
+        try:
+            docs = await retriever_chain.ainvoke(queries, config=config)
+            logger.info(f"Retrieved documents (Vector search): {len(docs)}")
+            return state.copy(update={"retrieved_documents": docs})
+        except Exception as e:
+            logger.error(f"Error in vector search: {str(e)}")
+            # Return state without documents in case of error
+            return state.copy(update={"retrieved_documents": []})
 
     async def _node_ajoin_retrieved_documents(
         self, state: RAGIntermediateOutputs, config: RunnableConfig
@@ -349,53 +355,64 @@ class RAGPipelineBuilder:
             parser=PydanticOutputParser(pydantic_object=ReRankedDocument),
         )
 
-        reranked_scores = await reranker_chain.abatch(
-            inputs=[
-                {"question": state.question, "context": doc.page_content}
-                for doc in state.context_documents
-            ],
-            return_exceptions=True,
-            config=config
-        )
-
-        # Log errors if they exist and raise an exception if all results are errors
-        exceptions = [
-            score for score in reranked_scores if isinstance(score, Exception)
-        ]
-        if exceptions:
-            for i, exc in enumerate(exceptions):
-                logger.error(f"Error during reranking (document {i}): {exc}")
-
-        valid_results = [
-            (doc, rscore)
-            for doc, rscore in zip(state.context_documents, reranked_scores)
-            if isinstance(rscore, ReRankedDocument)
-        ]
-
-        if not valid_results:
-            error_msg = (
-                f"All reranking operations failed. Total errors: {len(exceptions)}"
+        try:
+            reranked_scores = await reranker_chain.abatch(
+                inputs=[
+                    {"question": state.question, "context": doc.page_content}
+                    for doc in state.context_documents
+                ],
+                return_exceptions=True,
+                config=config
             )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
 
-        reranked_docs = sorted(valid_results, key=lambda x: x[1].score, reverse=True)
+            # Log errors if they exist and raise an exception if all results are errors
+            exceptions = [
+                score for score in reranked_scores if isinstance(score, Exception)
+            ]
+            if exceptions:
+                for i, exc in enumerate(exceptions):
+                    logger.error(f"Error during reranking (document {i}): {exc}")
 
-        reranked_scores = [
-            (doc, rscore) for doc, rscore in reranked_docs if rscore.score > 2
-        ]
+            valid_results = [
+                (doc, rscore)
+                for doc, rscore in zip(state.context_documents, reranked_scores)
+                if isinstance(rscore, ReRankedDocument)
+            ]
 
-        docs = [doc for doc, _ in reranked_docs]
-        scores = [rscore.score for _, rscore in reranked_docs]
-        reranker_answers = [rscore.explanation for _, rscore in reranked_docs]
+            if not valid_results:
+                error_msg = (
+                    f"All reranking operations failed. Total errors: {len(exceptions)}"
+                )
+                logger.error(error_msg)
+                raise ValueError(error_msg)
 
-        return state.copy(
-            update={
-                "reranked_documents": docs,
-                "reranker_answers": reranker_answers,
-                "reranker_scores": scores,
-            }
-        )
+            reranked_docs = sorted(valid_results, key=lambda x: x[1].score, reverse=True)
+
+            reranked_scores = [
+                (doc, rscore) for doc, rscore in reranked_docs if rscore.score > 2
+            ]
+
+            docs = [doc for doc, _ in reranked_docs]
+            scores = [rscore.score for _, rscore in reranked_docs]
+            reranker_answers = [rscore.explanation for _, rscore in reranked_docs]
+
+            return state.copy(
+                update={
+                    "reranked_documents": docs,
+                    "reranker_answers": reranker_answers,
+                    "reranker_scores": scores,
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error in reranking: {str(e)}")
+            # Return state without reranking in case of error
+            return state.copy(
+                update={
+                    "reranked_documents": state.context_documents,
+                    "reranker_answers": [],
+                    "reranker_scores": [],
+                }
+            )
 
     async def _node_amake_context(
         self, state: RAGIntermediateOutputs, config: RunnableConfig
@@ -406,53 +423,63 @@ class RAGPipelineBuilder:
         ]
 
         curr_ctx = []
-        for paragraph in paragraphs:
-            curr_ctx.append(paragraph)
-            ctx = "\n".join(curr_ctx)
-            prompt_value = await chat_answer_prompt_template.ainvoke(
-                input={
-                    "question": state.question,
-                    "context": ctx,
-                }
-            )
-            prompt_value = cast(ChatPromptValue, prompt_value).to_string()
-            prompt_tokens_len = len(self._tokenizer.tokenize(prompt_value))
-            if prompt_tokens_len > self._max_input_tokens:
-                break
+        try:
+            for paragraph in paragraphs:
+                curr_ctx.append(paragraph)
+                ctx = "\n".join(curr_ctx)
+                prompt_value = await chat_answer_prompt_template.ainvoke(
+                    input={
+                        "question": state.question,
+                        "context": ctx,
+                    }
+                )
+                prompt_value = cast(ChatPromptValue, prompt_value).to_string()
+                prompt_tokens_len = len(self._tokenizer.tokenize(prompt_value))
+                if prompt_tokens_len > self._max_input_tokens:
+                    break
 
-        if len(curr_ctx) == 0:
-            raise ValueError("Context is too long")
-        elif len(curr_ctx) < len(paragraphs):
-            logger.warning(
-                "Reducing number of paragraphs in the context due to limit on tokens."
-                f"Took %s paragraphs out of %s." % (len(curr_ctx), len(paragraphs))
-            )
+            if len(curr_ctx) == 0:
+                raise ValueError("Context is too long")
+            elif len(curr_ctx) < len(paragraphs):
+                logger.warning(
+                    "Reducing number of paragraphs in the context due to limit on tokens."
+                    f"Took %s paragraphs out of %s." % (len(curr_ctx), len(paragraphs))
+                )
 
-        paragraphs_contexts = "\n".join(curr_ctx)
+            paragraphs_contexts = "\n".join(curr_ctx)
 
-        return state.copy(update={"answer_context": paragraphs_contexts})
+            return state.copy(update={"answer_context": paragraphs_contexts})
+        except Exception as e:
+            logger.error(f"Error in making context: {str(e)}")
+            # Return state with minimal context in case of error
+            return state.copy(update={"answer_context": paragraphs[0] if paragraphs else ""})
 
     async def _node_agenerate_answer(
         self, state: RAGIntermediateOutputs, config: RunnableConfig
     ) -> RAGIntermediateOutputs:
         answer_generator_chain = chat_answer_prompt_template | self._llm
 
-        answer = cast(
-            AIMessage,
-            await answer_generator_chain.ainvoke(
-                input={
-                    "question": state.question,
-                    "context": state.answer_context,
-                },
-                config=config,
+        try:
+            answer = cast(
+                AIMessage,
+                await answer_generator_chain.ainvoke(
+                    input={
+                        "question": state.question,
+                        "context": state.answer_context,
+                    },
+                    config=config,
+                )
             )
-        )
 
-        final_answer = answer.content
+            final_answer = answer.content
 
-        logger.info(f"FINAL ANSWER: {final_answer}")
+            logger.info(f"FINAL ANSWER: {final_answer}")
 
-        return state.copy(update={"answer": final_answer})
+            return state.copy(update={"answer": final_answer})
+        except Exception as e:
+            logger.error(f"Error in generating answer: {str(e)}")
+            # Return state with error message in case of error
+            return state.copy(update={"answer": f"Error generating answer: {str(e)}"})
     
 
 async def run_rag_pipeline(*, 
