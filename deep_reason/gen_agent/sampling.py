@@ -1,8 +1,9 @@
 import networkx as nx
-from typing import Set, Tuple, List, Optional
+from typing import Set, Tuple, List, Optional, Dict
 from itertools import combinations
 import random
 from collections import deque
+import pandas as pd
 
 def extract_entity_chains(graphml_path: str, chain_length: int, n_samples: Optional[int] = None) -> Set[Tuple[str, ...]]:
     """
@@ -158,3 +159,55 @@ def optimized_extract_entity_chains(graphml_path: str, chain_length: int, n_samp
             chains.add(tuple(chain))
     
     return chains
+
+def map_entities_to_descriptions(entity_chains: Set[Tuple[str, ...]], parquet_path: str) -> Dict[str, Dict[str, str]]:
+    """
+    Map entities from chains to their descriptions from a parquet file.
+    
+    Args:
+        entity_chains (Set[Tuple[str, ...]]): Set of entity chains from optimized_extract_entity_chains
+        parquet_path (str): Path to the parquet file containing entity descriptions
+        
+    Returns:
+        Dict[str, Dict[str, str]]: Dictionary mapping each entity to its description and other fields
+    """
+    # Read the parquet file
+    df = pd.read_parquet(parquet_path)
+    
+    # Create a dictionary to store entity descriptions
+    entity_descriptions = {}
+    
+    # Get all unique entities from the chains
+    unique_entities = set()
+    for chain in entity_chains:
+        unique_entities.update(chain)
+    
+    # Map each entity to its description
+    for entity in unique_entities:
+        # Find matching row in the dataframe
+        matching_rows = df[df['title'] == entity]
+        
+        if not matching_rows.empty:
+            # Get the first matching row
+            row = matching_rows.iloc[0]
+            # Create a dictionary with all relevant fields
+            entity_descriptions[entity] = {
+                'title': row['title'],
+                'description': row['description'],
+                'type': row.get('type', ''),
+                'frequency': row.get('frequency', 0),
+                'degree': row.get('degree', 0)
+            }
+        else:
+            # If no matching entity found, create an entry with empty values
+            entity_descriptions[entity] = {
+                'title': entity,
+                'description': '',
+                'type': '',
+                'frequency': 0,
+                'degree': 0
+            }
+    
+    return entity_descriptions
+
+

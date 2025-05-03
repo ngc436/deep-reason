@@ -5,9 +5,11 @@ You are provided with DESCRIPTION of each of the entities in the chain and RELAT
 Your task is to define relationship between the first and the last entity of the chain. 
 If there is no relationship between the first and the last entity that you can infer from the provided information, return "no_relationship".
 
-DESCRIPTION of the entities: {entity_descriptions}
+DESCRIPTION of the entities: 
+{entity_descriptions}
 
-RELATIONSHIPS between consecutive entities: {relationships}
+RELATIONSHIPS between consecutive entities: 
+{relationships}
 
 Your answer should be in the following format:
 {response_format_description}

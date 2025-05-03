@@ -1,34 +1,30 @@
-from deep_reason.gen_agent.sampling import optimized_extract_entity_chains, get_all_paths
+from deep_reason.gen_agent.sampling import optimized_extract_entity_chains, get_all_paths, map_entities_to_descriptions
 
 def main():
     # Example usage with a graphml file
-    graphml_path = "datasets/graphs/obliqa-full/output/graph.graphml"  # Replace with your actual graphml file path
-    
-    # Example 1: Get all chains of length 3
-    # print("Getting all chains of length 3:")
-    # all_chains = extract_entity_chains(graphml_path, chain_length=3)
-    # print(f"Found {len(all_chains)} chains:")
-    # for chain in all_chains:
-    #     print(f"Chain: {' -> '.join(chain)}")
+    graphml_path = "datasets/graphs/obliqa-full/output/graph.graphml" 
+    parquet_path = "datasets/graphs/obliqa-full/output/entities.parquet"
     
     # Example 2: Sample 5 random chains of length 10 using optimized version
     print("\nSampling 5 random chains of length 10 using optimized version:")
     sampled_chains = optimized_extract_entity_chains(graphml_path, chain_length=10, n_samples=5)
     for chain in sampled_chains:
         print(f"Sampled chain: {' -> '.join(chain)}")
+
+    # Map entities to their descriptions
+    print("\nMapping entities to their descriptions:")
+    entity_descriptions = map_entities_to_descriptions(sampled_chains, parquet_path)
     
-    # # Example 3: Get all paths of length 3
-    # print("\nGetting all paths of length 3:")
-    # all_paths = get_all_paths(graphml_path, chain_length=3)
-    # print(f"Found {len(all_paths)} paths:")
-    # for path in all_paths:
-    #     print(f"Path: {' -> '.join(path)}")
-    
-    # # Example 4: Sample 5 random paths of length 3
-    # print("\nSampling 5 random paths of length 3:")
-    # sampled_paths = get_all_paths(graphml_path, chain_length=3, n_samples=5)
-    # for path in sampled_paths:
-    #     print(f"Sampled path: {' -> '.join(path)}")
+    # Print descriptions for each entity in the chains
+    for chain in sampled_chains:
+        print(f"\nChain: {' -> '.join(chain)}")
+        for entity in chain:
+            desc = entity_descriptions[entity]
+            print(f"  Entity: {entity}")
+            print(f"    Description: {desc['description']}")
+            print(f"    Type: {desc['type']}")
+            print(f"    Frequency: {desc['frequency']}")
+            print(f"    Degree: {desc['degree']}")
 
 if __name__ == "__main__":
     main() 
