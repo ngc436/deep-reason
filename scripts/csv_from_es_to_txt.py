@@ -22,8 +22,10 @@ def convert_csv_to_txt(csv_path):
         # Sort by chunk_id to maintain paragraph order
         group = group.sort_values('metadata.chunk_id')
         
+        # Truncate file name to 20 characters
+        truncated_name = file_name[:20]
         # Create the output file path
-        output_path = os.path.join(input_dir, f"{file_name}.txt")
+        output_path = os.path.join(input_dir, f"{truncated_name}.txt")
         
         with open(output_path, 'w', encoding='utf-8') as f:
             current_chapter = None
