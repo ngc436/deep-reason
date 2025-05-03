@@ -119,10 +119,10 @@ def export_to_csv(documents: List[Dict[str, Any]], fields: List[str], output_fil
         for doc in flattened_docs:
             all_fields.update(doc.keys())
         
-        # Remove empty columns
+        # Remove empty columns and exclude 'embedding' and 'vector' columns
         non_empty_fields = []
         for field in sorted(all_fields):
-            if any(doc.get(field) for doc in flattened_docs):
+            if field not in ['embedding', 'vector'] and any(doc.get(field) for doc in flattened_docs):
                 non_empty_fields.append(field)
         
         # Write to CSV
@@ -130,8 +130,8 @@ def export_to_csv(documents: List[Dict[str, Any]], fields: List[str], output_fil
             writer = csv.DictWriter(csvfile, fieldnames=non_empty_fields)
             writer.writeheader()
             for doc in flattened_docs:
-                # Only include non-empty fields
-                row = {k: v for k, v in doc.items() if k in non_empty_fields}
+                # Only include non-empty fields and exclude 'embedding' and 'vector'
+                row = {k: v for k, v in doc.items() if k in non_empty_fields and k not in ['embedding', 'vector']}
                 writer.writerow(row)
         
         print(f"Successfully exported {len(documents)} documents to {output_file}")
