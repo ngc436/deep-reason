@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import os
 from pathlib import Path
 from typing import List
 import json
@@ -63,6 +62,27 @@ def load_documents_from_folder(folder_path: str, max_tokens: int = 65536, tokeni
     
     return documents
 
+def check_api_connection(api_base: str, api_key: str) -> bool:
+    """Check if we can connect to the API endpoint."""
+    import openai
+    from openai import OpenAI
+    
+    try:
+        client = OpenAI(
+            base_url=api_base,
+            api_key=api_key
+        )
+        # Try a simple test request
+        response = client.chat.completions.create(
+            model="/model",
+            messages=[{"role": "user", "content": "test"}],
+            max_tokens=1
+        )
+        return True
+    except Exception as e:
+        print(f"Error connecting to API: {str(e)}")
+        return False
+
 def main():
     parser = argparse.ArgumentParser(description="Topic Modeling CLI")
     parser.add_argument(
@@ -116,6 +136,12 @@ def main():
     
     args = parser.parse_args()
     
+    # Check API connection first
+    print("Checking API connection...")
+    if not check_api_connection(args.api_base, args.api_key):
+        print("Failed to connect to API. Please check your API base URL and key.")
+        return
+    
     # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(exist_ok=True)
@@ -141,7 +167,9 @@ def main():
         embedding_model=embedding_model,
         n_topics=args.n_topics,
         min_topic_size=args.min_topic_size,
-        documents=documents
+        documents=documents,
+        api_base=args.api_base,
+        api_key=args.api_key
     )
     
     # Extract topics
@@ -156,11 +184,19 @@ def main():
     # Generate timestamp for unique filenames
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    # Save topic information to JSON
+    # Convert numpy arrays to lists for JSON serialization
     topic_output = {
         "topic_info": result["topic_info"].to_dict() if hasattr(result["topic_info"], 'to_dict') else result["topic_info"],
         "topic_representations": result["topic_representations"],
-        "document_info": result["document_info"]
+        "document_info": [
+            {
+                "document_id": info["document_id"],
+                "document": info["document"],
+                "topic": int(info["topic"].item()) if hasattr(info["topic"], 'item') else int(info["topic"]),
+                "probability": float(info["probability"][0].item()) if hasattr(info["probability"], 'item') else float(info["probability"][0])  # Take the first probability value
+            }
+            for info in result["document_info"]
+        ]
     }
     
     output_file = output_dir / f"topic_results_{timestamp}.json"
