@@ -119,6 +119,7 @@ def optimized_extract_entity_chains(graphml_path: str, chain_length: int, n_samp
     Extract chains of entities using an optimized random walk strategy.
     This is more efficient for long chains than the BFS approach.
     Ensures there is no direct connection between first and last elements in the chain.
+    Also ensures all chains are unique by checking both forward and reverse order.
     
     Args:
         graphml_path (str): Path to the .graphml file
@@ -127,12 +128,18 @@ def optimized_extract_entity_chains(graphml_path: str, chain_length: int, n_samp
         max_attempts (int): Maximum number of attempts to find valid chains
         
     Returns:
-        Set[Tuple[str, ...]]: Set of entity chains
+        Set[Tuple[str, ...]]: Set of unique entity chains
     """
     G = nx.read_graphml(graphml_path)
     chains = set()
     nodes = list(G.nodes())
     attempts = 0
+    
+    def is_chain_unique(chain: List[str]) -> bool:
+        """Check if a chain is unique by comparing both forward and reverse order."""
+        chain_tuple = tuple(chain)
+        reverse_chain_tuple = tuple(reversed(chain))
+        return chain_tuple not in chains and reverse_chain_tuple not in chains
     
     while len(chains) < n_samples and attempts < max_attempts:
         attempts += 1
@@ -158,7 +165,7 @@ def optimized_extract_entity_chains(graphml_path: str, chain_length: int, n_samp
         # If we found a valid chain of the right length
         if len(chain) == chain_length:
             # Check if there is no direct connection between first and last elements
-            if not G.has_edge(chain[0], chain[-1]):
+            if not G.has_edge(chain[0], chain[-1]) and is_chain_unique(chain):
                 chains.add(tuple(chain))
     
     return chains

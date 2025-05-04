@@ -20,3 +20,14 @@ RELATIONSHIPS between consecutive entities:
 Your answer must strictly follow this JSON schema:
 {schema}
 """
+
+PREPARE_FOR_KNOWLEDGE_EDITING_PROMPT = """
+You are an expert in preparing input text that define relationship between two entities for knowledge editing.
+
+Look carefully at provided examples below that provide understanding of how the input should look like.
+{examples}
+You are provided with TEXT and DESCRIPTION of the text.
+
+TEXT:
+{text}
+"""

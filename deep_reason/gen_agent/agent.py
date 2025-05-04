@@ -5,6 +5,9 @@ from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.runnables import Runnable, RunnableLambda, RunnableParallel
 import json
+import os
+from tqdm.asyncio import tqdm
+from datetime import datetime
 
 from deep_reason.gen_agent.sampling import (
     optimized_extract_entity_chains,
@@ -22,6 +25,17 @@ class ComplexRelationship(BaseModel):
     relationships: List[str] = Field(description="Inferred relationships between first and last entities in a form of concise sentences. Each of the two entities should be in the sentence.")
 
 
+class ComplexRelationshipResult(BaseModel):
+    """Model for the complete result of complex relationship inference"""
+    chain: List[str] = Field(description="The chain of entities")
+    first_entity: str = Field(description="First entity in the chain")
+    last_entity: str = Field(description="Last entity in the chain")
+    entity_descriptions: Dict[str, str] = Field(description="Descriptions of entities in the chain")
+    relationship_descriptions: List[str] = Field(description="Descriptions of relationships between consecutive entities")
+    inferred_relationships: List[str] = Field(description="Inferred relationships between first and last entities")
+    evidence: List[str] = Field(description="Evidence supporting the inferred relationships")
+
+
 class ComplexRelationshipAgent:
     """Agent for inferring complex relationships between chain endpoints"""
     
@@ -33,7 +47,9 @@ class ComplexRelationshipAgent:
         relationships_parquet_path: str,
         chain_length: int = 3,
         n_samples: int = 15,
-        max_retries: int = 3
+        max_retries: int = 3,
+        output_dir: str = "results",
+        max_concurrency: int = 100
     ):
         self.llm = llm
         self.graphml_path = graphml_path
@@ -42,6 +58,11 @@ class ComplexRelationshipAgent:
         self.chain_length = chain_length
         self.n_samples = n_samples
         self.max_retries = max_retries
+        self.output_dir = output_dir
+        self.max_concurrency = max_concurrency
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
         
         # Initialize the chain
         self.chain = self._build_chain()
@@ -158,52 +179,92 @@ class ComplexRelationshipAgent:
         """Infer complex relationships for sampled chains"""
         
         # Sample chains
-        chains = optimized_extract_entity_chains(
+        print("Sampling entity chains...")
+        chains = list(optimized_extract_entity_chains(
             self.graphml_path,
             self.chain_length,
             self.n_samples
-        )
+        ))
         
         # Get entity descriptions
+        print("Mapping entities to descriptions...")
         entity_descriptions = map_entities_to_descriptions(
             chains,
             self.entities_parquet_path
         )
         
         # Get relationships
+        print("Extracting chain relationships...")
         relationships = extract_chain_relationships(
             chains,
             self.relationships_parquet_path
         )
         
-        # Process each chain
+        # Process each chain with progress bar
+        print("Processing chains to infer relationships...")
         results = []
-        for chain in chains:
-            try:
-                # Prepare input for the chain
-                input_data = {
-                    "entity_chain": chain,
-                    "entity_descriptions": entity_descriptions,
-                    "relationships": relationships
-                }
-                
-                # Run the chain
-                result = await self.chain.ainvoke(input_data)
-                
-                # Convert to dictionary
-                result_dict = result.model_dump()
-                result_dict["chain"] = list(chain)
-                
-                results.append(result_dict)
-            except Exception as e:
-                print(f"Error processing chain {chain}: {str(e)}")
-                # Add a default result for failed chains
-                results.append({
-                    "chain": list(chain),
-                    "first_entity": chain[0],
-                    "last_entity": chain[-1],
-                    "relationship": "no_relationship",
-                    "evidence": []
-                })
+        
+        # Process chains in batches
+        for i in range(0, len(chains), self.max_concurrency):
+            batch = chains[i:i + self.max_concurrency]
+            batch_results = []
+            
+            async for chain in tqdm(batch, desc=f"Processing batch {i//self.max_concurrency + 1}"):
+                try:
+                    # Prepare input for the chain
+                    input_data = {
+                        "entity_chain": chain,
+                        "entity_descriptions": entity_descriptions,
+                        "relationships": relationships
+                    }
+                    
+                    # Run the chain
+                    result = await self.chain.ainvoke(input_data)
+                    
+                    # Convert to ComplexRelationshipResult
+                    result_dict = result.model_dump()
+                    relationship_descriptions = [
+                        f"{source} -> {target}: {rel['description']}"
+                        for (source, target), rel in relationships.items()
+                        if source in chain and target in chain
+                    ]
+                    
+                    result_obj = ComplexRelationshipResult(
+                        chain=list(chain),
+                        first_entity=result_dict["first_entity"],
+                        last_entity=result_dict["last_entity"],
+                        entity_descriptions={
+                            entity: desc["description"]
+                            for entity, desc in entity_descriptions.items()
+                            if entity in chain
+                        },
+                        relationship_descriptions=relationship_descriptions,
+                        inferred_relationships=result_dict["relationships"],
+                        evidence=result_dict["evidence"]
+                    )
+                    
+                    batch_results.append(result_obj.model_dump())
+                except Exception as e:
+                    print(f"Error processing chain {chain}: {str(e)}")
+                    # Add a default result for failed chains
+                    result_obj = ComplexRelationshipResult(
+                        chain=list(chain),
+                        first_entity=chain[0],
+                        last_entity=chain[-1],
+                        entity_descriptions={},
+                        relationship_descriptions=[],
+                        inferred_relationships=["no_relationship"],
+                        evidence=[]
+                    )
+                    batch_results.append(result_obj.model_dump())
+            
+            results.extend(batch_results)
+        
+        # Save results to JSON file
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = os.path.join(self.output_dir, f"complex_agent_result_{timestamp}.json")
+        with open(output_file, 'w') as f:
+            json.dump(results, f, indent=2)
+        print(f"Results saved to {output_file}")
         
         return results
