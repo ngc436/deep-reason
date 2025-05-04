@@ -7,7 +7,7 @@ async def main():
     llm = VLLMChatOpenAI(
         model_name="/model",
         temperature=0.1,
-        max_tokens=1000,
+        max_tokens=6000,
         top_p=0.95,
         base_url="http://10.32.2.11:8164/v1",
         api_key="token-abc123"
@@ -19,8 +19,8 @@ async def main():
         graphml_path="datasets/graphs/obliqa-full/output/graph.graphml",
         entities_parquet_path="datasets/graphs/obliqa-full/output/entities.parquet",
         relationships_parquet_path="datasets/graphs/obliqa-full/output/relationships.parquet",
-        chain_length=10,
-        n_samples=5
+        chain_length=3,
+        n_samples=15
     )
     
     # Infer relationships
@@ -32,7 +32,9 @@ async def main():
         print(f"Chain: {' -> '.join(result['chain'])}")
         print(f"First Entity: {result['first_entity']}")
         print(f"Last Entity: {result['last_entity']}")
-        print(f"Inferred Relationship: {result['relationship']}")
+        print(f"Inferred Relationships:")
+        for relationship in result['relationships']:
+            print(f"  - {relationship}")
         print("Evidence:")
         for evidence in result['evidence']:
             print(f"  - {evidence}")

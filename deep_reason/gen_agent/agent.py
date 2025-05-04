@@ -2,10 +2,9 @@ from typing import Dict, List, Tuple, Any
 from pydantic import BaseModel, Field
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.output_parsers import PydanticOutputParser
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.runnables import Runnable, RunnableLambda, RunnableParallel
 import json
-import asyncio
 
 from deep_reason.gen_agent.sampling import (
     optimized_extract_entity_chains,
@@ -19,8 +18,8 @@ class ComplexRelationship(BaseModel):
     """Model for complex relationship between chain endpoints"""
     first_entity: str = Field(description="First entity in the chain")
     last_entity: str = Field(description="Last entity in the chain")
-    relationship: str = Field(description="Inferred relationship between first and last entities")
-    evidence: List[str] = Field(description="List of evidence supporting the inferred relationship")
+    evidence: List[str] = Field(description="List of evidence to infer relationship between first and last entities in the chain based on the relationships and descriptions.")
+    relationships: List[str] = Field(description="Inferred relationships between first and last entities in a form of concise sentences. Each of the two entities should be in the sentence.")
 
 
 class ComplexRelationshipAgent:
@@ -32,8 +31,8 @@ class ComplexRelationshipAgent:
         graphml_path: str,
         entities_parquet_path: str,
         relationships_parquet_path: str,
-        chain_length: int = 10,
-        n_samples: int = 5,
+        chain_length: int = 3,
+        n_samples: int = 15,
         max_retries: int = 3
     ):
         self.llm = llm
@@ -54,27 +53,19 @@ class ComplexRelationshipAgent:
         parser = PydanticOutputParser(pydantic_object=ComplexRelationship)
         
         # Create the prompt template with Pydantic schema instructions
-        prompt = ChatPromptTemplate.from_template(
-            COMPLEX_RELATIONSHIPS_PROMPT + """
-            Example of a valid response:
-            {{
-                "first_entity": "Entity A",
-                "last_entity": "Entity B",
-                "relationship": "Entity A is related to Entity B through...",
-                "evidence": [
-                    "Evidence point 1",
-                    "Evidence point 2"
-                ]
-            }}
-            """
+        prompt = PromptTemplate(
+            input_variables=["entity_chain", "entity_descriptions", "relationships"],
+            template=COMPLEX_RELATIONSHIPS_PROMPT,
+            partial_variables={"schema": parser.get_format_instructions()}
         )
         
         # Build the chain
         return (
             RunnableParallel(
+                entity_chain=lambda x: self._format_entity_chain(x["entity_chain"]),
                 entity_descriptions=lambda x: self._format_entity_descriptions(x["entity_descriptions"]),
                 relationships=lambda x: self._format_relationships(x["relationships"]),
-                schema=lambda _: ComplexRelationship.model_json_schema()
+                # schema=lambda _: ComplexRelationship.model_json_schema()
             )
             | prompt
             | self.llm
@@ -133,22 +124,35 @@ class ComplexRelationshipAgent:
         """Format entity descriptions for the prompt"""
         formatted = []
         for entity, desc in descriptions.items():
-            formatted.append(f"Entity: {entity}")
-            formatted.append(f"  Description: {desc['description']}")
-            formatted.append(f"  Type: {desc['type']}")
-            formatted.append(f"  Frequency: {desc['frequency']}")
-            formatted.append(f"  Degree: {desc['degree']}")
+            formatted.append(f"{entity}: {desc['description']}")
+            # formatted.append(f"Entity: {entity}")
+            # formatted.append(f"  Description: {desc['description']}")
+            # formatted.append(f"  Type: {desc['type']}")
+            # formatted.append(f"  Frequency: {desc['frequency']}")
+            # formatted.append(f"  Degree: {desc['degree']}")
         return "\n".join(formatted)
     
     def _format_relationships(self, relationships: Dict[Tuple[str, str], Dict[str, Any]]) -> str:
         """Format relationships for the prompt"""
         formatted = []
         for (source, target), rel in relationships.items():
-            formatted.append(f"Relationship: {source} -> {target}")
-            formatted.append(f"  Description: {rel['description']}")
-            formatted.append(f"  Weight: {rel['weight']}")
-            formatted.append(f"  Combined Degree: {rel['combined_degree']}")
+            formatted.append(f"{source} -> {target}: {rel['description']}")
+            # formatted.append(f"Relationship: {source} -> {target}")
+            # formatted.append(f"  Description: {rel['description']}")
+            # formatted.append(f"  Weight: {rel['weight']}")
+            # formatted.append(f"  Combined Degree: {rel['combined_degree']}")
         return "\n".join(formatted)
+    
+    def _format_entity_chain(self, chain: List[str]) -> str:
+        """Format entity chain with arrows between entities
+        
+        Args:
+            chain: List of entities in the chain
+            
+        Returns:
+            Formatted string with entities joined by arrows
+        """
+        return " -> ".join(chain)
     
     async def infer_relationships(self) -> List[Dict[str, Any]]:
         """Infer complex relationships for sampled chains"""
@@ -178,6 +182,7 @@ class ComplexRelationshipAgent:
             try:
                 # Prepare input for the chain
                 input_data = {
+                    "entity_chain": chain,
                     "entity_descriptions": entity_descriptions,
                     "relationships": relationships
                 }

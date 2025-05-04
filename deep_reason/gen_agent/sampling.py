@@ -118,6 +118,7 @@ def optimized_extract_entity_chains(graphml_path: str, chain_length: int, n_samp
     """
     Extract chains of entities using an optimized random walk strategy.
     This is more efficient for long chains than the BFS approach.
+    Ensures there is no direct connection between first and last elements in the chain.
     
     Args:
         graphml_path (str): Path to the .graphml file
@@ -154,9 +155,11 @@ def optimized_extract_entity_chains(graphml_path: str, chain_length: int, n_samp
                 # If we hit a cycle, restart from a random node
                 break
         
-        # If we found a valid chain of the right length, add it
+        # If we found a valid chain of the right length
         if len(chain) == chain_length:
-            chains.add(tuple(chain))
+            # Check if there is no direct connection between first and last elements
+            if not G.has_edge(chain[0], chain[-1]):
+                chains.add(tuple(chain))
     
     return chains
 
