@@ -11,6 +11,6 @@ DESCRIPTION of the entities:
 RELATIONSHIPS between consecutive entities: 
 {relationships}
 
-Your answer should be in the following format:
-{response_format_description}
+Your answer must strictly follow this JSON schema:
+{schema}
 """

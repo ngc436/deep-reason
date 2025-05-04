@@ -1,5 +1,5 @@
 import networkx as nx
-from typing import Set, Tuple, List, Optional, Dict
+from typing import Set, Tuple, List, Optional, Dict, Any
 from itertools import combinations
 import random
 from collections import deque
@@ -209,5 +209,64 @@ def map_entities_to_descriptions(entity_chains: Set[Tuple[str, ...]], parquet_pa
             }
     
     return entity_descriptions
+
+def extract_chain_relationships(entity_chains: Set[Tuple[str, ...]], relationships_parquet_path: str) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """
+    Extract relationships between neighboring entities in chains from a parquet file.
+    
+    Args:
+        entity_chains (Set[Tuple[str, ...]]): Set of entity chains
+        relationships_parquet_path (str): Path to the parquet file containing relationships
+        
+    Returns:
+        Dict[Tuple[str, str], Dict[str, Any]]: Dictionary mapping pairs of neighboring entities to their relationship details
+    """
+    # Read the relationships parquet file
+    df = pd.read_parquet(relationships_parquet_path)
+    
+    # Create a dictionary to store relationships
+    relationships = {}
+    
+    # Process each chain
+    for chain in entity_chains:
+        # Get all pairs of neighboring entities in the chain
+        for i in range(len(chain) - 1):
+            source = chain[i]
+            target = chain[i + 1]
+            
+            # Find matching relationships in the dataframe
+            matching_relationships = df[
+                (df['source'] == source) & 
+                (df['target'] == target)
+            ]
+            
+            if not matching_relationships.empty:
+                # Get the first matching relationship
+                relationship = matching_relationships.iloc[0]
+                # Store the relationship with all available fields
+                relationships[(source, target)] = {
+                    'id': relationship['id'],
+                    'human_readable_id': relationship['human_readable_id'],
+                    'source': relationship['source'],
+                    'target': relationship['target'],
+                    'description': relationship['description'],
+                    'weight': relationship['weight'],
+                    'combined_degree': relationship['combined_degree'],
+                    'text_unit_ids': relationship['text_unit_ids']
+                }
+            else:
+                # If no relationship found, create an empty entry
+                relationships[(source, target)] = {
+                    'id': '',
+                    'human_readable_id': '',
+                    'source': source,
+                    'target': target,
+                    'description': '',
+                    'weight': 0,
+                    'combined_degree': 0,
+                    'text_unit_ids': []
+                }
+    
+    return relationships
 
 
