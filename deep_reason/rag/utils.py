@@ -82,6 +82,12 @@ class _RerankedDocs:
 
 
 class VLLMChatOpenAI(ChatOpenAI):
+    _no_think: bool = False
+
+    def __init__(self, *args, no_think: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.__class__._no_think = no_think
+
     def _get_request_payload(
         self,
         input_: LanguageModelInput,
@@ -94,8 +100,12 @@ class VLLMChatOpenAI(ChatOpenAI):
         # in September 2024 release
         if "max_completion_tokens" in payload:
             payload["max_tokens"] = payload.pop("max_completion_tokens")
+        if self.__class__._no_think:
+            if "messages" in payload:
+                payload["messages"].insert(0, {"role": "system", "content": "/no_think"})
+            else:
+                payload["messages"] = [{"role": "system", "content": "/no_think"}]
         return payload
-
 
 
 class PlannerOutputParser(BaseOutputParser[List[str]]):

@@ -5,6 +5,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.runnables import Runnable, RunnableLambda, RunnableParallel
 import json
+from tqdm.asyncio import tqdm
 
 from deep_reason.gen_agent.sampling import (
     optimized_extract_entity_chains,
@@ -158,6 +159,7 @@ class ComplexRelationshipAgent:
         """Infer complex relationships for sampled chains"""
         
         # Sample chains
+        print("Sampling entity chains...")
         chains = optimized_extract_entity_chains(
             self.graphml_path,
             self.chain_length,
@@ -165,20 +167,23 @@ class ComplexRelationshipAgent:
         )
         
         # Get entity descriptions
+        print("Mapping entities to descriptions...")
         entity_descriptions = map_entities_to_descriptions(
             chains,
             self.entities_parquet_path
         )
         
         # Get relationships
+        print("Extracting chain relationships...")
         relationships = extract_chain_relationships(
             chains,
             self.relationships_parquet_path
         )
         
-        # Process each chain
+        # Process each chain with progress bar
+        print("Processing chains to infer relationships...")
         results = []
-        for chain in chains:
+        async for chain in tqdm(chains, desc="Processing chains"):
             try:
                 # Prepare input for the chain
                 input_data = {

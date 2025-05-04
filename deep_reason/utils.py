@@ -53,6 +53,12 @@ class QAPipeline(Generic[StateT], ABC):
 
 
 class VLLMChatOpenAI(ChatOpenAI):
+    _no_think: bool = False
+
+    def __init__(self, *args, no_think: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.__class__._no_think = no_think
+
     def _get_request_payload(
         self,
         input_: LanguageModelInput,
@@ -65,6 +71,16 @@ class VLLMChatOpenAI(ChatOpenAI):
         # in September 2024 release
         if "max_completion_tokens" in payload:
             payload["max_tokens"] = payload.pop("max_completion_tokens")
+        
+        # Add /no_think system prompt if no_think is True
+        if self.__class__._no_think:
+            if "messages" in payload:
+                # Insert /no_think as the first system message
+                payload["messages"].insert(0, {"role": "system", "content": "/no_think"})
+            else:
+                # If no messages exist, create a new list with the /no_think system message
+                payload["messages"] = [{"role": "system", "content": "/no_think"}]
+        
         return payload
 
 class StreamQAPipeline(QAPipeline[StateT]):

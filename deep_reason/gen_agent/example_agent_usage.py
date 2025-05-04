@@ -10,7 +10,8 @@ async def main():
         max_tokens=6000,
         top_p=0.95,
         base_url="http://10.32.2.11:8164/v1",
-        api_key="token-abc123"
+        api_key="token-abc123",
+        no_think=True
     )
     
     # Initialize the agent
