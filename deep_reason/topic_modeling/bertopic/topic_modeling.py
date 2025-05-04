@@ -1,12 +1,58 @@
-import os
 import numpy as np
 from typing import List, Dict, Optional
 from bertopic import BERTopic
-from bertopic.representation import OpenAI
+from bertopic.representation import KeyBERTInspired, MaximalMarginalRelevance, BaseRepresentation
 import openai
 from umap import UMAP
 from hdbscan import HDBSCAN
 from sklearn.feature_extraction.text import CountVectorizer
+
+class QwenRepresentation(BaseRepresentation):
+    def __init__(self, 
+                 api_base: str = "http://10.32.2.11:8164/v1", 
+                 api_key: str = "token-abc123",
+                 model: str = "/model",
+                 top_n_words: int = 10):
+        super().__init__()
+        self.client = openai.OpenAI(
+            base_url=api_base,
+            api_key=api_key
+        )
+        self.model = model
+        self.top_n_words = top_n_words
+
+    def extract_topics(self, topic_model, documents, c_tf_idf, topics):
+        """Extract topics using Qwen3 model"""
+        topic_representations = {}
+        
+        for topic_id in set(topics):
+            if topic_id != -1:  # Skip outlier topic
+                # Get documents for this topic
+                topic_docs = [doc for doc, t in zip(documents, topics) if t == topic_id]
+                
+                # Create prompt for topic representation
+                prompt = f"""Given the following documents, extract the {self.top_n_words} most important and representative words that describe their common topic:
+                
+                Documents:
+                {' '.join(topic_docs[:3])}  # Use first 3 documents for context
+                
+                Please list the words in order of importance, separated by commas."""
+                
+                # Get response from Qwen3
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1
+                )
+                
+                # Extract words from response
+                words = response.choices[0].message.content.strip().split(',')
+                words = [word.strip() for word in words]
+                
+                # Format as BERTopic expects: list of (word, score) tuples
+                topic_representations[topic_id] = [(word, 1.0 - (i/len(words))) for i, word in enumerate(words)]
+        
+        return topic_representations
 
 # Configure the embedding model - qwen embeddings
 class QwenEmbeddings:
@@ -40,22 +86,24 @@ class QwenEmbeddings:
 
 def create_topic_model(
     embedding_model: Optional[object] = None,
-    language_model: Optional[str] = None,
     n_topics: Optional[int] = None,
     min_topic_size: int = 10,
     verbose: bool = True,
-    documents: Optional[List[str]] = None
+    documents: Optional[List[str]] = None,
+    api_base: Optional[str] = None,
+    api_key: Optional[str] = None
 ) -> BERTopic:
     """
     Create a BERTopic model configured with the specified embedding and language models.
     
     Args:
         embedding_model: Custom embedding model (if None, will use Qwen embeddings)
-        language_model: Custom language model (if None, will use Qwen2.5 72B)
         n_topics: Number of topics to extract (None for automatic detection)
         min_topic_size: Minimum size of topics
         verbose: Whether to print progress information
         documents: List of documents to be processed (used to set appropriate parameters)
+        api_base: API base URL for the language model
+        api_key: API key for the language model
         
     Returns:
         Configured BERTopic model
@@ -64,65 +112,60 @@ def create_topic_model(
     if embedding_model is None:
         embedding_model = QwenEmbeddings()
     
-    # Determine appropriate UMAP parameters based on document count
-    n_components = 5  # Default
-    n_neighbors = 15  # Default
-    
-    # Adjust parameters for small datasets
-    if documents is not None:
-        doc_count = len(documents)
-        if doc_count < 15:
-            # For very small datasets, adjust parameters
-            n_neighbors = max(2, doc_count - 1)  # At least 2 neighbors
-            n_components = min(2, doc_count - 1)  # Reduce dimensions for small datasets
-    
-    # Dimensionality reduction
+    # Configure UMAP for better dimensionality reduction
     umap_model = UMAP(
-        n_neighbors=n_neighbors, 
-        n_components=n_components, 
-        min_dist=0.0, 
-        metric='cosine', 
-        random_state=42
+        n_neighbors=5,  # Reduced further for more localized clusters
+        n_components=5,
+        min_dist=0.0,
+        metric='cosine',
+        random_state=42,
+        low_memory=True,
+        densmap=True  # Enable density-aware UMAP
     )
     
-    # Adjust clustering model for small datasets
-    if documents is not None and len(documents) < min_topic_size:
-        min_topic_size = max(2, len(documents) // 2)  # Adjust min_topic_size for small datasets
-    
-    # Clustering model
+    # Configure HDBSCAN for better topic control
     hdbscan_model = HDBSCAN(
-        min_cluster_size=min_topic_size,
+        min_cluster_size=5,  # Reduced from 10 to allow more topics
         metric='euclidean',
-        cluster_selection_method='eom',
-        prediction_data=True
+        cluster_selection_method='eom',  # Changed back to 'eom' for better cluster selection
+        prediction_data=True,
+        min_samples=5,  # Increased for better stability
+        cluster_selection_epsilon=0.1,  # Reduced for more clusters
+        allow_single_cluster=False,  # Changed to prevent single large cluster
+        alpha=1.0,
+        core_dist_n_jobs=1
     )
     
-    # Vectorizer model
-    vectorizer_model = CountVectorizer(stop_words="english")
+    # Configure vectorizer for Russian text
+    vectorizer_model = CountVectorizer(
+        stop_words=None,  # Don't use English stopwords
+        min_df=2,  # Lower min_df to allow more terms
+        max_df=0.8,  # Lower max_df to filter out very common terms
+        max_features=10000,  # Maximum number of features
+        ngram_range=(1, 2),  # Include both single words and bigrams
+        token_pattern=r'(?u)\b\w+\b'  # Include all word characters
+    )
     
-    # Configure language model for topic representation
-    if language_model is None:
-        # Use Qwen2.5 72B for representation
-        os.environ["OPENAI_API_BASE"] = "http://10.32.2.11:8031/v1"
-        os.environ["OPENAI_API_KEY"] = "token-abc123"
-        
-        # Create an OpenAI client for the representation model
-        openai_client = openai.OpenAI(
-            base_url="http://10.32.2.11:8031/v1",
-            api_key="token-abc123"
-        )
-        
-        representation_model = OpenAI(
-            client=openai_client,
-            model="/model",  # Using Qwen2.5 72B model ()
-            chat=True,
-            top_n_words=10,
-            prompt_name="default"
+    # Configure representation model
+    if api_base and api_key:
+        representation_model = QwenRepresentation(
+            api_base=api_base,
+            api_key=api_key,
+            model="/model"
         )
     else:
-        representation_model = language_model
+        # Use KeyBERT and MMR for representation with adjusted parameters
+        representation_model = {
+            "KeyBERT": KeyBERTInspired(
+                top_n_words=10,
+                nr_repr_docs=5
+            ),
+            "MMR": MaximalMarginalRelevance(
+                diversity=0.3  # Lower diversity to keep more relevant words
+            )
+        }
     
-    # Create and return BERTopic model
+    # Create and return BERTopic model with adjusted parameters
     topic_model = BERTopic(
         embedding_model=embedding_model,
         umap_model=umap_model,
@@ -130,7 +173,9 @@ def create_topic_model(
         vectorizer_model=vectorizer_model,
         representation_model=representation_model,
         nr_topics=n_topics,
-        verbose=verbose
+        verbose=verbose,
+        calculate_probabilities=True,
+        min_topic_size=min_topic_size
     )
     
     return topic_model
