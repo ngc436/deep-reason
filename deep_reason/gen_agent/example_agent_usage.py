@@ -1,6 +1,8 @@
 import asyncio
 from deep_reason.gen_agent.agent import ComplexRelationshipAgent
 from deep_reason.rag.utils import VLLMChatOpenAI
+from datasets import load_dataset
+
 
 async def main():
     # Initialize VLLM client
@@ -17,15 +19,16 @@ async def main():
     # Initialize the agent
     agent = ComplexRelationshipAgent(
         llm=llm,
-        graphml_path="datasets/graphs/obliqa-full/output/graph.graphml",
-        entities_parquet_path="datasets/graphs/obliqa-full/output/entities.parquet",
-        relationships_parquet_path="datasets/graphs/obliqa-full/output/relationships.parquet",
+        graphml_path="datasets/graphs/tat_data_3/output/graph.graphml",
+        entities_parquet_path="datasets/graphs/tat_data_3/output/entities.parquet",
+        relationships_parquet_path="datasets/graphs/tat_data_3/output/relationships.parquet",
         chain_length=3,
         n_samples=100
     )
     
     # Infer relationships
     results = await agent.infer_relationships()
+
     
     # Print results
     # for i, result in enumerate(results):
