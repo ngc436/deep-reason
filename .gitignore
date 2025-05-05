@@ -187,3 +187,6 @@ answers.json
 cache.json  
 config/model-openai.yaml
 results/
+
+# Temporary files and directories
+tmp/
