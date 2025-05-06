@@ -1,11 +1,9 @@
 import os
 import json
-from typing import Dict, List, Tuple, Any, TypedDict, Annotated, Optional
-from pydantic import BaseModel, Field
+from typing import Dict, List, Tuple, Any, TypedDict, Optional
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
-from langchain_core.runnables import Runnable, RunnableLambda, RunnableParallel
 from tqdm.asyncio import tqdm
 from datetime import datetime
 from langgraph.graph import StateGraph, START, END
@@ -16,34 +14,11 @@ from deep_reason.gen_agent.sampling import (
     extract_chain_relationships
 )
 from deep_reason.gen_agent.prompts import COMPLEX_RELATIONSHIPS_PROMPT, PREPARE_FOR_KNOWLEDGE_EDITING_PROMPT
-
-
-class ComplexRelationship(BaseModel):
-    """Model for complex relationship between chain endpoints"""
-    first_entity: str = Field(description="First entity in the chain")
-    last_entity: str = Field(description="Last entity in the chain")
-    evidence: List[str] = Field(description="List of evidence to infer relationship between first and last entities in the chain based on the relationships and descriptions.")
-    relationships: List[str] = Field(description="Inferred relationships between first and last entities in a form of concise sentences. Each of the two entities should be in the sentence.")
-
-
-class ComplexRelationshipResult(BaseModel):
-    """Model for the complete result of complex relationship inference"""
-    chain: List[str] = Field(description="The chain of entities")
-    first_entity: str = Field(description="First entity in the chain")
-    last_entity: str = Field(description="Last entity in the chain")
-    entity_descriptions: Dict[str, str] = Field(description="Descriptions of entities in the chain")
-    relationship_descriptions: List[str] = Field(description="Descriptions of relationships between consecutive entities")
-    inferred_relationships: List[str] = Field(description="Inferred relationships between first and last entities")
-    evidence: List[str] = Field(description="Evidence supporting the inferred relationships")
-
-class KnowledgeEditingInput(BaseModel):
-    """Model for the input data for knowledge editing"""
-    edit_prompt: str = Field(description="Input prompt in a form of question where answer is one of the entities")
-    subject: str = Field(description="The subject of the edit prompt")
-    target: str = Field(description="The actual answer to the edit prompt that is one of the entities")
-    generalization_prompt: str = Field(description="The generalization prompt to check that editing is successful with a bit changed edit prompt")
-    locality_prompt: str = Field(description="The locality prompt to check that model does not influenced on unrelated to editing inputs (though connected by entity)")
-    portability_prompt: str = Field(description="The portability prompt to measure success for reasoning or application")
+from deep_reason.gen_agent.scheme import (
+    ComplexRelationship,
+    ComplexRelationshipResult,
+    KnowledgeEditingInput
+)
 
 
 class AgentState(TypedDict):
@@ -140,22 +115,38 @@ class ComplexRelationshipAgent:
         return {**state, "complex_relationship": result}
     
     async def _prepare_editing_input_node(self, state: AgentState) -> AgentState:
-        """Node for preparing knowledge editing input"""
-        # Prepare input for knowledge editing input preparation
-        input_data = {
-            "entities": f"{state['entity_chain'][0]}, {state['entity_chain'][-1]}",
-            "relationships": self._format_relationships(state["relationships"]),
-            "descriptions": self._format_entity_descriptions(state["entity_descriptions"])
-        }
-        
-        # Run the knowledge editing input preparation
-        result = await self._parse_editing_output_with_retry(
-            await self.llm.ainvoke(
-                self.editing_prompt.format(**input_data)
+        """Node for preparing knowledge editing input for each inferred relationship"""
+        complex_relationship = state.get("complex_relationship")
+        if not complex_relationship or not complex_relationship.relationships:
+            # Fallback: behave as before if no relationships
+            input_data = {
+                "entities": f"{state['entity_chain'][0]}, {state['entity_chain'][-1]}",
+                "relationships": self._format_relationships(state["relationships"]),
+                "descriptions": self._format_entity_descriptions(state["entity_descriptions"])
+            }
+            result = await self._parse_editing_output_with_retry(
+                await self.llm.ainvoke(
+                    self.editing_prompt.format(**input_data)
+                )
             )
-        )
-        
-        return {**state, "knowledge_editing_input": result}
+            return {**state, "knowledge_editing_input": result}
+
+        # For each inferred relationship, create a knowledge editing input
+        knowledge_editing_inputs = []
+        for relationship in complex_relationship.relationships:
+            input_data = {
+                "entities": f"{state['entity_chain'][0]}, {state['entity_chain'][-1]}",
+                "relationships": relationship,  # Pass the current relationship
+                "descriptions": self._format_entity_descriptions(state["entity_descriptions"])
+            }
+            result = await self._parse_editing_output_with_retry(
+                await self.llm.ainvoke(
+                    self.editing_prompt.format(**input_data)
+                )
+            )
+            knowledge_editing_inputs.append(result)
+
+        return {**state, "knowledge_editing_input": knowledge_editing_inputs}
     
     def _format_entity_descriptions(self, descriptions: Dict[str, Dict[str, Any]]) -> str:
         """Format entity descriptions for the prompt"""
@@ -321,6 +312,14 @@ class ComplexRelationshipAgent:
                     final_state = await self.workflow.ainvoke(state)
                     
                     # Convert to result format
+                    knowledge_editing_input = final_state["knowledge_editing_input"]
+                    if isinstance(knowledge_editing_input, list):
+                        knowledge_editing_input_dumped = [k.model_dump() for k in knowledge_editing_input]
+                    elif knowledge_editing_input is not None:
+                        knowledge_editing_input_dumped = knowledge_editing_input.model_dump()
+                    else:
+                        knowledge_editing_input_dumped = None
+
                     result_dict = {
                         "chain": list(chain),
                         "first_entity": final_state["complex_relationship"].first_entity,
@@ -337,7 +336,7 @@ class ComplexRelationshipAgent:
                         ],
                         "inferred_relationships": final_state["complex_relationship"].relationships,
                         "evidence": final_state["complex_relationship"].evidence,
-                        "knowledge_editing_input": final_state["knowledge_editing_input"].model_dump()
+                        "knowledge_editing_input": knowledge_editing_input_dumped
                     }
                     
                     batch_results.append(result_dict)
