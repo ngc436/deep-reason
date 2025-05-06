@@ -3,6 +3,7 @@ import csv
 from elasticsearch import Elasticsearch, NotFoundError
 from typing import List, Dict, Any
 import sys
+from datetime import datetime
 
 def get_es_client(host: str, username: str, password: str) -> Elasticsearch:
     """Create and return an Elasticsearch client."""
@@ -12,11 +13,18 @@ def get_es_client(host: str, username: str, password: str) -> Elasticsearch:
         request_timeout=300000
     )
 
-def list_indices(es_client: Elasticsearch) -> List[str]:
-    """List all available indices in the Elasticsearch cluster."""
+def list_indices(es_client: Elasticsearch) -> Dict[str, str]:
+    """List all available indices in the Elasticsearch cluster with their creation times."""
     try:
         indices = es_client.indices.get(index='*')
-        return list(indices.keys())
+        index_info = {}
+        for index_name in indices.keys():
+            settings = es_client.indices.get_settings(index=index_name)
+            creation_date = settings[index_name]['settings']['index']['creation_date']
+            # Convert Unix timestamp to human-readable date
+            creation_time = datetime.fromtimestamp(int(creation_date)/1000).strftime('%Y-%m-%d %H:%M:%S')
+            index_info[index_name] = creation_time
+        return index_info
     except Exception as e:
         print(f"Error listing indices: {e}")
         sys.exit(1)
@@ -155,9 +163,11 @@ def main():
     
     # List available indices
     indices = list_indices(es_client)
-    print("\nAvailable indices:")
-    for idx in indices:
-        print(f"- {idx}")
+    print("\nAvailable indices (sorted by creation time, most recent first):")
+    # Sort indices by creation time in descending order
+    sorted_indices = sorted(indices.items(), key=lambda x: x[1], reverse=True)
+    for idx, creation_time in sorted_indices:
+        print(f"- {idx} (Created: {creation_time})")
     
     # If no index specified, exit
     if not args.index:

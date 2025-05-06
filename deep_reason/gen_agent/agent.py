@@ -86,7 +86,6 @@ class ComplexRelationshipAgent:
                 entity_chain=lambda x: self._format_entity_chain(x["entity_chain"]),
                 entity_descriptions=lambda x: self._format_entity_descriptions(x["entity_descriptions"]),
                 relationships=lambda x: self._format_relationships(x["relationships"]),
-                # schema=lambda _: ComplexRelationship.model_json_schema()
             )
             | prompt
             | self.llm
