@@ -22,7 +22,7 @@ async def main():
         entities_parquet_path="datasets/graphs/tat_data_3/output/entities.parquet",
         relationships_parquet_path="datasets/graphs/tat_data_3/output/relationships.parquet",
         chain_length=3,
-        n_samples=10
+        n_samples=2
     )
     
     # Infer relationships and prepare knowledge editing inputs
@@ -48,9 +48,17 @@ async def main():
             print(f"  - {evidence}")
         
         # Print knowledge editing input if available
-        if result['knowledge_editing_input']:
-            print("\nKnowledge Editing Input:")
-            editing_input = result['knowledge_editing_input']
+        editing_input = result['knowledge_editing_input']
+        if isinstance(editing_input, list):
+            for idx, ei in enumerate(editing_input):
+                print(f"  Knowledge Editing Input {idx+1}:")
+                print(f"    Edit Prompt: {ei['edit_prompt']}")
+                print(f"    Subject: {ei['subject']}")
+                print(f"    Target: {ei['target']}")
+                print(f"    Generalization Prompt: {ei['generalization_prompt']}")
+                print(f"    Locality Prompt: {ei['locality_prompt']}")
+                print(f"    Portability Prompt: {ei['portability_prompt']}")
+        elif editing_input is not None:
             print(f"  Edit Prompt: {editing_input['edit_prompt']}")
             print(f"  Subject: {editing_input['subject']}")
             print(f"  Target: {editing_input['target']}")
@@ -58,7 +66,7 @@ async def main():
             print(f"  Locality Prompt: {editing_input['locality_prompt']}")
             print(f"  Portability Prompt: {editing_input['portability_prompt']}")
         else:
-            print("\nNo knowledge editing input available for this chain")
+            print("  Knowledge Editing Input: None")
 
 if __name__ == "__main__":
     asyncio.run(main()) 
