@@ -35,6 +35,15 @@ class ComplexRelationshipResult(BaseModel):
     inferred_relationships: List[str] = Field(description="Inferred relationships between first and last entities")
     evidence: List[str] = Field(description="Evidence supporting the inferred relationships")
 
+class KnowledgeEditingInput(BaseModel):
+    """Model for the input data for knowledge editing"""
+    edit_prompt: str = Field(description="Input prompt in a form of question where answer is one of the entities")
+    subject: str = Field(description="The subject of the edit prompt")
+    target: str = Field(description="The actual answer to the edit prompt that is one of the entities")
+    generalization_prompt: str = Field(description="The generalization prompt to check that editing is successful with a bit changed edit prompt")
+    locality_prompt: str = Field(description="The locality prompt to check that model does not influenced on unrelated to editing inputs (though connected by entity)")
+    portability_prompt: str = Field(description="The portability prompt to measure success for reasoning or application")
+
 
 class ComplexRelationshipAgent:
     """Agent for inferring complex relationships between chain endpoints"""
