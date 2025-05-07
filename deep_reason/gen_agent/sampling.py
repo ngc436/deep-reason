@@ -286,7 +286,7 @@ def optimized_extract_community_chains(
     communities_parquet_path: str,
     chain_length: int,
     n_communities: int,
-    n_samples_per_community: int,
+    n_samples_per_community: Optional[int],
     max_attempts: int = 1000
 ) -> Dict[int, Set[Tuple[str, ...]]]:
     """
@@ -298,11 +298,13 @@ def optimized_extract_community_chains(
         communities_parquet_path (str): Path to the parquet file containing community information
         chain_length (int): Desired length of the entity chains
         n_communities (int): Number of communities to sample from
-        n_samples_per_community (int): Number of chains to sample per community
-        max_attempts (int): Maximum number of attempts to find valid chains per community
+        n_samples_per_community (Optional[int]): Number of chains to sample per community. 
+            If None, extracts all possible chains.
+        max_attempts (int): Maximum number of attempts to find valid chains per community (ignored if n_samples_per_community is None)
         
     Returns:
-        Dict[int, Set[Tuple[str, ...]]]: Dictionary mapping community IDs to sets of entity chains
+        Dict[int, Set[Tuple[str, ...]]]: Dictionary mapping community IDs to sets of entity chains.
+            Each chain is a tuple of entity names (not UUIDs).
     """
     print("Starting chain extraction process...")
     
@@ -348,7 +350,6 @@ def optimized_extract_community_chains(
         entity_names = [uuid_to_name.get(eid) for eid in entity_ids]
         entity_names = [name for name in entity_names if name is not None]
         print(f"Found {len(entity_names)} mapped names for this community")
-        print("Entity names:", entity_names)
         
         if not entity_names:
             print("No valid names found for this community, skipping...")
@@ -358,54 +359,62 @@ def optimized_extract_community_chains(
         community_subgraph = G.subgraph(entity_names)
         print(f"Created subgraph with {len(community_subgraph.nodes())} nodes and {len(community_subgraph.edges())} edges")
         
-        # Print subgraph structure
-        print("\nSubgraph structure:")
-        for node in community_subgraph.nodes():
-            neighbors = list(community_subgraph.neighbors(node))
-            print(f"  {node} -> {neighbors}")
-        
         # Skip if subgraph is too small
         if len(community_subgraph) < chain_length:
             print(f"Subgraph too small ({len(community_subgraph)} < {chain_length}), skipping...")
             continue
             
         chains = set()
-        attempts = 0
         
-        def is_chain_unique(chain: List[str]) -> bool:
-            """Check if a chain is unique by comparing both forward and reverse order."""
-            chain_tuple = tuple(chain)
-            reverse_chain_tuple = tuple(reversed(chain))
-            return chain_tuple not in chains and reverse_chain_tuple not in chains
-        
-        while len(chains) < n_samples_per_community and attempts < max_attempts:
-            attempts += 1
-            # Start from a random node in the community
-            current_node = random.choice(list(community_subgraph.nodes()))
-            chain = [current_node]
+        if n_samples_per_community is None:
+            # Use all_simple_paths to find all possible chains
+            for start_node in community_subgraph.nodes():
+                for end_node in community_subgraph.nodes():
+                    if start_node != end_node:
+                        try:
+                            paths = list(nx.all_simple_paths(community_subgraph, start_node, end_node, cutoff=chain_length-1))
+                            valid_paths = [path for path in paths if len(path) == chain_length]
+                            for path in valid_paths:
+                                # Store the chain with entity names directly
+                                chains.add(tuple(path))
+                        except nx.NetworkXNoPath:
+                            continue
+        else:
+            attempts = 0
             
-            # Perform random walk within the community
-            while len(chain) < chain_length:
-                neighbors = list(community_subgraph.neighbors(current_node))
-                if not neighbors:
-                    break
-                    
-                # Choose next node randomly
-                next_node = random.choice(neighbors)
-                if next_node not in chain:
-                    chain.append(next_node)
-                    current_node = next_node
-                else:
-                    # If we hit a cycle, restart from a random node
-                    break
+            def is_chain_unique(chain: List[str]) -> bool:
+                """Check if a chain is unique by comparing both forward and reverse order."""
+                chain_tuple = tuple(chain)
+                reverse_chain_tuple = tuple(reversed(chain))
+                return chain_tuple not in chains and reverse_chain_tuple not in chains
             
-            # If we found a valid chain of the right length
-            if len(chain) == chain_length and is_chain_unique(chain):
-                # Convert chain back to UUIDs for consistency
-                uuid_chain = tuple(name_to_uuid.get(name, name) for name in chain)
-                chains.add(uuid_chain)
+            while len(chains) < n_samples_per_community and attempts < max_attempts:
+                attempts += 1
+                # Start from a random node in the community
+                current_node = random.choice(list(community_subgraph.nodes()))
+                chain = [current_node]
+                
+                # Perform random walk within the community
+                while len(chain) < chain_length:
+                    neighbors = list(community_subgraph.neighbors(current_node))
+                    if not neighbors:
+                        break
+                        
+                    # Choose next node randomly
+                    next_node = random.choice(neighbors)
+                    if next_node not in chain:
+                        chain.append(next_node)
+                        current_node = next_node
+                    else:
+                        # If we hit a cycle, restart from a random node
+                        break
+                
+                # If we found a valid chain of the right length
+                if len(chain) == chain_length and is_chain_unique(chain):
+                    # Store the chain with entity names directly
+                    chains.add(tuple(chain))
         
-        print(f"Found {len(chains)} chains after {attempts} attempts")
+        print(f"Found {len(chains)} chains")
         if chains:
             community_chains[community_id] = chains
     

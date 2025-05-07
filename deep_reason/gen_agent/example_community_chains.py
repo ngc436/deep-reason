@@ -31,9 +31,9 @@ def main():
     community_chains = optimized_extract_community_chains(
         graphml_path="./datasets/graphs/tat_data_3/output/graph.graphml",
         communities_parquet_path="./datasets/graphs/tat_data_3/output/communities.parquet",
-        chain_length=3,  # Use chain length of 2
+        chain_length=4,  # Use chain length of 2
         n_communities=1,  # Sample from 1 community
-        n_samples_per_community=3,  # Get 3 chains per community
+        n_samples_per_community=None,  # Get 3 chains per community
         max_attempts=500  # Maximum attempts to find valid chains
     )
     
