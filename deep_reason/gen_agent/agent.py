@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Dict, List, Tuple, Any, TypedDict, Optional
+from typing import Dict, List, Tuple, Any, TypedDict, Optional, Union
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
@@ -10,6 +10,7 @@ from langgraph.graph import StateGraph, START, END
 
 from deep_reason.gen_agent.sampling import (
     optimized_extract_entity_chains,
+    optimized_extract_community_chains,
     map_entities_to_descriptions,
     extract_chain_relationships
 )
@@ -42,7 +43,11 @@ class ComplexRelationshipAgent:
         n_samples: int = 15,
         max_retries: int = 3,
         output_dir: str = "results",
-        max_concurrency: int = 100
+        max_concurrency: int = 100,
+        use_communities: bool = False,
+        communities_parquet_path: Optional[str] = None,
+        n_communities: Optional[int] = None,
+        n_samples_per_community: Optional[int] = None
     ):
         self.llm = llm
         self.graphml_path = graphml_path
@@ -53,6 +58,19 @@ class ComplexRelationshipAgent:
         self.max_retries = max_retries
         self.output_dir = output_dir
         self.max_concurrency = max_concurrency
+        self.use_communities = use_communities
+        self.communities_parquet_path = communities_parquet_path
+        self.n_communities = n_communities
+        self.n_samples_per_community = n_samples_per_community
+        
+        # Validate community-related parameters
+        if self.use_communities:
+            if not self.communities_parquet_path:
+                raise ValueError("communities_parquet_path must be provided when use_communities is True")
+            if not self.n_communities:
+                raise ValueError("n_communities must be provided when use_communities is True")
+            if not self.n_samples_per_community:
+                raise ValueError("n_samples_per_community must be provided when use_communities is True")
         
         # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
@@ -266,13 +284,28 @@ class ComplexRelationshipAgent:
     async def infer_relationships(self) -> List[Dict[str, Any]]:
         """Infer complex relationships for sampled chains and prepare knowledge editing inputs"""
         
-        # Sample chains
+        # Sample chains based on configuration
         print("Sampling entity chains...")
-        chains = list(optimized_extract_entity_chains(
-            self.graphml_path,
-            self.chain_length,
-            self.n_samples
-        ))
+        if self.use_communities:
+            print(f"Using community-based sampling with {self.n_communities} communities")
+            community_chains = optimized_extract_community_chains(
+                self.graphml_path,
+                self.communities_parquet_path,
+                self.chain_length,
+                self.n_communities,
+                self.n_samples_per_community
+            )
+            # Flatten community chains into a single list
+            chains = []
+            for community_id, community_chain_set in community_chains.items():
+                chains.extend(list(community_chain_set))
+        else:
+            print("Using regular chain sampling")
+            chains = list(optimized_extract_entity_chains(
+                self.graphml_path,
+                self.chain_length,
+                self.n_samples
+            ))
         
         # Get entity descriptions
         print("Mapping entities to descriptions...")

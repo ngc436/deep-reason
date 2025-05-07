@@ -72,19 +72,47 @@ def parse_args():
         type=str,
         help="Path to output file. If not provided, results will be printed to stdout"
     )
+
+    # Add community-based sampling options
+    parser.add_argument(
+        "--use-communities",
+        action="store_true",
+        help="Use community-based chain sampling instead of regular sampling"
+    )
+    
+    parser.add_argument(
+        "--communities",
+        type=str,
+        help="Path to the communities parquet file (required when --use-communities is set)"
+    )
+    
+    parser.add_argument(
+        "--n-communities",
+        type=int,
+        help="Number of communities to sample from (required when --use-communities is set)"
+    )
+    
+    parser.add_argument(
+        "--n-samples-per-community",
+        type=int,
+        help="Number of chains to sample per community (required when --use-communities is set)"
+    )
     
     return parser.parse_args()
 
 
 def validate_paths(args):
     """Validate that all required files exist"""
-    paths = {
-        "GraphML": args.graphml,
-        "Entities": args.entities,
-        "Relationships": args.relationships
-    }
+    required_files = [
+        ("graphml", args.graphml),
+        ("entities", args.entities),
+        ("relationships", args.relationships)
+    ]
     
-    for name, path in paths.items():
+    if args.use_communities:
+        required_files.append(("communities", args.communities))
+    
+    for name, path in required_files:
         if not Path(path).exists():
             raise FileNotFoundError(f"{name} file not found: {path}")
 
@@ -111,7 +139,11 @@ async def main():
             relationships_parquet_path=args.relationships,
             chain_length=args.chain_length,
             n_samples=args.n_samples,
-            max_retries=args.max_retries
+            max_retries=args.max_retries,
+            use_communities=args.use_communities,
+            communities_parquet_path=args.communities if args.use_communities else None,
+            n_communities=args.n_communities if args.use_communities else None,
+            n_samples_per_community=args.n_samples_per_community if args.use_communities else None
         )
         
         # Run inference
