@@ -64,7 +64,6 @@ def load_documents_from_folder(folder_path: str, max_tokens: int = 65536, tokeni
 
 def check_api_connection(api_base: str, api_key: str) -> bool:
     """Check if we can connect to the API endpoint."""
-    import openai
     from openai import OpenAI
     
     try:
