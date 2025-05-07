@@ -15,7 +15,8 @@ async def main():
         no_think=True
     )
     
-    # Initialize the agent
+    # Example 1: Regular chain sampling
+    print("\nExample 1: Regular chain sampling")
     agent = ComplexRelationshipAgent(
         llm=llm,
         graphml_path="datasets/graphs/tat_data_3/output/graph.graphml",
@@ -27,8 +28,30 @@ async def main():
     
     # Infer relationships and prepare knowledge editing inputs
     results = await agent.infer_relationships()
+    print_results(results)
+    
+    # Example 2: Community-based sampling
+    print("\nExample 2: Community-based sampling")
+    agent = ComplexRelationshipAgent(
+        llm=llm,
+        graphml_path="datasets/graphs/tat_data_3/output/graph.graphml",
+        entities_parquet_path="datasets/graphs/tat_data_3/output/entities.parquet",
+        relationships_parquet_path="datasets/graphs/tat_data_3/output/relationships.parquet",
+        chain_length=3,
+        n_samples=2,  # This will be ignored when use_communities is True
+        use_communities=True,
+        communities_parquet_path="datasets/graphs/tat_data_3/output/communities.parquet",
+        n_communities=2,
+        n_samples_per_community=1
+    )
+    
+    # Infer relationships and prepare knowledge editing inputs
+    results = await agent.infer_relationships()
+    print_results(results)
 
-    # Print results
+
+def print_results(results):
+    """Helper function to print results in a readable format"""
     for i, result in enumerate(results):
         print(f"\nChain {i + 1}:")
         print(f"Chain: {' -> '.join(result['chain'])}")
@@ -67,6 +90,7 @@ async def main():
             print(f"  Portability Prompt: {editing_input['portability_prompt']}")
         else:
             print("  Knowledge Editing Input: None")
+
 
 if __name__ == "__main__":
     asyncio.run(main()) 
