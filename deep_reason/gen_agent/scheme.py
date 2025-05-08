@@ -26,11 +26,22 @@ class ComplexRelationshipResult(BaseModel):
     relationship_descriptions: List[str] = Field(description="Descriptions of relationships between consecutive entities")
     inferred_relationships: List[InferredRelationship] = Field(description="Inferred relationships between first and last entities")
 
+class Locality(BaseModel):
+    """Model for locality of the edit prompt"""
+    locality_prompt: str = Field(description="The locality prompt to check that model does not influenced on unrelated to editing inputs (though connected by entity)")
+    locality_answer: str = Field(description="The answer to the locality prompt")
+
+class Generalization(BaseModel):
+    """Model for generalization of the edit prompt"""
+    generalization_prompt: str = Field(description="The generalization prompt to check that editing is successful with a bit changed edit prompt")
+    generalization_answer: str = Field(description="The answer to the generalization prompt")
+
 class KnowledgeEditingInput(BaseModel):
     """Model for the input data for knowledge editing"""
     edit_prompt: str = Field(description="Input prompt in a form of question where answer is one of the entities")
     subject: str = Field(description="The subject of the edit prompt should point to the target entity")
     target: str = Field(description="The actual answer to the edit prompt that is one of the entities")
-    generalization_prompt: str = Field(description="The generalization prompt to check that editing is successful with a bit changed edit prompt")
-    locality_prompt: str = Field(description="The locality prompt to check that model does not influenced on unrelated to editing inputs (though connected by entity)")
+    generalization: Generalization = Field(description="The generalization of the edit prompt")
+    locality: Locality = Field(description="The locality of the edit prompt")
     portability_prompt: str = Field(description="The portability prompt to measure success for reasoning or application") 
+    rephrase: List[str] = Field(description="Alternative ways to phrase the edit prompt")

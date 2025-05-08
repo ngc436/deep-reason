@@ -19,7 +19,9 @@ from deep_reason.gen_agent.scheme import (
     ComplexRelationship,
     ComplexRelationshipResult,
     KnowledgeEditingInput,
-    InferredRelationship
+    InferredRelationship,
+    Generalization,
+    Locality
 )
 
 
@@ -211,6 +213,32 @@ class ComplexRelationshipAgent:
                         json_str = json_str[start:end]
                 
                 data = json.loads(json_str)
+                
+                # Ensure generalization and locality are properly structured
+                if 'generalization' in data:
+                    if isinstance(data['generalization'], dict):
+                        data['generalization'] = Generalization(**data['generalization'])
+                    else:
+                        data['generalization'] = Generalization(
+                            generalization_prompt=data.get('generalization_prompt', ''),
+                            generalization_answer=data.get('generalization_answer', '')
+                        )
+                
+                if 'locality' in data:
+                    if isinstance(data['locality'], dict):
+                        data['locality'] = Locality(**data['locality'])
+                    else:
+                        data['locality'] = Locality(
+                            locality_prompt=data.get('locality_prompt', ''),
+                            locality_answer=data.get('locality_answer', '')
+                        )
+                
+                # Ensure rephrase is a list
+                if 'rephrase' not in data:
+                    data['rephrase'] = []
+                elif not isinstance(data['rephrase'], list):
+                    data['rephrase'] = [data['rephrase']]
+                
                 return KnowledgeEditingInput(**data)
             except (json.JSONDecodeError, ValueError, AttributeError) as e:
                 if attempt < self.max_retries - 1:
