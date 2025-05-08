@@ -16,33 +16,35 @@ async def main():
     )
     
     # Example 1: Regular chain sampling
-    print("\nExample 1: Regular chain sampling")
-    agent = ComplexRelationshipAgent(
-        llm=llm,
-        graphml_path="datasets/graphs/tat_data_3/output/graph.graphml",
-        entities_parquet_path="datasets/graphs/tat_data_3/output/entities.parquet",
-        relationships_parquet_path="datasets/graphs/tat_data_3/output/relationships.parquet",
-        chain_length=3,
-        n_samples=2
-    )
+    # print("\nExample 1: Regular chain sampling")
+    # agent = ComplexRelationshipAgent(
+    #     llm=llm,
+    #     graphml_path="datasets/graphs/tat_data_3/output/graph.graphml",
+    #     entities_parquet_path="datasets/graphs/tat_data_3/output/entities.parquet",
+    #     relationships_parquet_path="datasets/graphs/tat_data_3/output/relationships.parquet",
+    #     chain_length=3,
+    #     n_samples=2,
+    #     dataset_name="tat_data_3"
+    # )
     
-    # Infer relationships and prepare knowledge editing inputs
-    results = await agent.infer_relationships()
-    print_results(results)
+    # # Infer relationships and prepare knowledge editing inputs
+    # results = await agent.infer_relationships()
+    # print_results(results)
     
     # Example 2: Community-based sampling
     print("\nExample 2: Community-based sampling")
     agent = ComplexRelationshipAgent(
         llm=llm,
-        graphml_path="datasets/graphs/tat_data_3/output/graph.graphml",
-        entities_parquet_path="datasets/graphs/tat_data_3/output/entities.parquet",
-        relationships_parquet_path="datasets/graphs/tat_data_3/output/relationships.parquet",
+        graphml_path="datasets/graphs/obliqa-full/output/graph.graphml",
+        entities_parquet_path="datasets/graphs/obliqa-full/output/entities.parquet",
+        relationships_parquet_path="datasets/graphs/obliqa-full/output/relationships.parquet",
         chain_length=3,
         n_samples=2,  # This will be ignored when use_communities is True
         use_communities=True,
-        communities_parquet_path="datasets/graphs/tat_data_3/output/communities.parquet",
+        communities_parquet_path="datasets/graphs/obliqa-full/output/communities.parquet",
         n_communities=2,
-        n_samples_per_community=1
+        n_samples_per_community=2,
+        dataset_name="obliqa-full"
     )
     
     # Infer relationships and prepare knowledge editing inputs
@@ -78,16 +80,30 @@ def print_results(results):
                 print(f"    Edit Prompt: {ei['edit_prompt']}")
                 print(f"    Subject: {ei['subject']}")
                 print(f"    Target: {ei['target']}")
-                print(f"    Generalization Prompt: {ei['generalization_prompt']}")
-                print(f"    Locality Prompt: {ei['locality_prompt']}")
+                print(f"    Generalization:")
+                print(f"      Prompt: {ei['generalization']['generalization_prompt']}")
+                print(f"      Answer: {ei['generalization']['generalization_answer']}")
+                print(f"    Locality:")
+                print(f"      Prompt: {ei['locality']['locality_prompt']}")
+                print(f"      Answer: {ei['locality']['locality_answer']}")
                 print(f"    Portability Prompt: {ei['portability_prompt']}")
+                print(f"    Rephrase:")
+                for rephrase in ei['rephrase']:
+                    print(f"      - {rephrase}")
         elif editing_input is not None:
             print(f"  Edit Prompt: {editing_input['edit_prompt']}")
             print(f"  Subject: {editing_input['subject']}")
             print(f"  Target: {editing_input['target']}")
-            print(f"  Generalization Prompt: {editing_input['generalization_prompt']}")
-            print(f"  Locality Prompt: {editing_input['locality_prompt']}")
+            print(f"  Generalization:")
+            print(f"    Prompt: {editing_input['generalization']['generalization_prompt']}")
+            print(f"    Answer: {editing_input['generalization']['generalization_answer']}")
+            print(f"  Locality:")
+            print(f"    Prompt: {editing_input['locality']['locality_prompt']}")
+            print(f"    Answer: {editing_input['locality']['locality_answer']}")
             print(f"  Portability Prompt: {editing_input['portability_prompt']}")
+            print(f"  Rephrase:")
+            for rephrase in editing_input['rephrase']:
+                print(f"    - {rephrase}")
         else:
             print("  Knowledge Editing Input: None")
 
