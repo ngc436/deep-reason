@@ -7,6 +7,15 @@ class ComplexRelationship(BaseModel):
     last_entity: str = Field(description="Last entity in the chain")
     evidence: List[str] = Field(description="List of evidence to infer relationship between first and last entities in the chain based on the relationships and descriptions.")
     relationships: List[str] = Field(description="Inferred relationships between first and last entities in a form of concise sentences. Each of the two entities should be in the sentence.")
+    score: float = Field(description="Self-reflect on the quality of the inferred relationship, and give a score between 0 and 10. If relationship does not bring specific new information and very obvious or contain book-specific relationship like image or formula number, score should be close to 0. If relationship brings new information and complex, score should be close to 10.")
+    reasoning: str = Field(description="Reasoning on the quality of the inferred relationship and score explanation")
+
+class InferredRelationship(BaseModel):
+    """Model for inferred relationship between two entities"""
+    relationship: str = Field(description="Inferred relationship between two entities in a form of concise sentence. Each of the two entities should be in the sentence.")
+    evidence: List[str] = Field(description="Evidence supporting the inferred relationship")
+    score: float = Field(description="Self-reflect on the quality of the inferred relationship, and give a score between 0 and 10. If relationship does not bring specific new information and very obvious, score should be close to 0. If relationship brings new information and complex, score should be close to 10.")
+    reasoning: str = Field(description="Reasoning on the quality of the inferred relationship and score explanation")
 
 class ComplexRelationshipResult(BaseModel):
     """Model for the complete result of complex relationship inference"""
@@ -15,8 +24,7 @@ class ComplexRelationshipResult(BaseModel):
     last_entity: str = Field(description="Last entity in the chain")
     entity_descriptions: Dict[str, str] = Field(description="Descriptions of entities in the chain")
     relationship_descriptions: List[str] = Field(description="Descriptions of relationships between consecutive entities")
-    inferred_relationships: List[str] = Field(description="Inferred relationships between first and last entities")
-    evidence: List[str] = Field(description="Evidence supporting the inferred relationships")
+    inferred_relationships: List[InferredRelationship] = Field(description="Inferred relationships between first and last entities")
 
 class KnowledgeEditingInput(BaseModel):
     """Model for the input data for knowledge editing"""

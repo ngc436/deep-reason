@@ -97,6 +97,13 @@ def parse_args():
         type=int,
         help="Number of chains to sample per community (required when --use-communities is set)"
     )
+
+    parser.add_argument(
+        "--dataset-name",
+        type=str,
+        default="unknown",
+        help="Name of the dataset being processed (default: unknown)"
+    )
     
     return parser.parse_args()
 
@@ -143,7 +150,8 @@ async def main():
             use_communities=args.use_communities,
             communities_parquet_path=args.communities if args.use_communities else None,
             n_communities=args.n_communities if args.use_communities else None,
-            n_samples_per_community=args.n_samples_per_community if args.use_communities else None
+            n_samples_per_community=args.n_samples_per_community if args.use_communities else None,
+            dataset_name=args.dataset_name
         )
         
         # Run inference

@@ -18,7 +18,8 @@ from deep_reason.gen_agent.prompts import COMPLEX_RELATIONSHIPS_PROMPT, PREPARE_
 from deep_reason.gen_agent.scheme import (
     ComplexRelationship,
     ComplexRelationshipResult,
-    KnowledgeEditingInput
+    KnowledgeEditingInput,
+    InferredRelationship
 )
 
 
@@ -47,7 +48,8 @@ class ComplexRelationshipAgent:
         use_communities: bool = False,
         communities_parquet_path: Optional[str] = None,
         n_communities: Optional[int] = None,
-        n_samples_per_community: Optional[int] = None
+        n_samples_per_community: Optional[int] = None,
+        dataset_name: str = "unknown"
     ):
         self.llm = llm
         self.graphml_path = graphml_path
@@ -62,6 +64,7 @@ class ComplexRelationshipAgent:
         self.communities_parquet_path = communities_parquet_path
         self.n_communities = n_communities
         self.n_samples_per_community = n_samples_per_community
+        self.dataset_name = dataset_name
         
         # Validate community-related parameters
         if self.use_communities:
@@ -69,8 +72,7 @@ class ComplexRelationshipAgent:
                 raise ValueError("communities_parquet_path must be provided when use_communities is True")
             if not self.n_communities:
                 raise ValueError("n_communities must be provided when use_communities is True")
-            if not self.n_samples_per_community:
-                raise ValueError("n_samples_per_community must be provided when use_communities is True")
+            # n_samples_per_community can be None to get all possible chains
         
         # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
@@ -288,6 +290,10 @@ class ComplexRelationshipAgent:
         print("Sampling entity chains...")
         if self.use_communities:
             print(f"Using community-based sampling with {self.n_communities} communities")
+            if self.n_samples_per_community is None:
+                print("Getting all possible chains per community")
+            else:
+                print(f"Getting {self.n_samples_per_community} chains per community")
             community_chains = optimized_extract_community_chains(
                 self.graphml_path,
                 self.communities_parquet_path,
@@ -299,6 +305,7 @@ class ComplexRelationshipAgent:
             chains = []
             for community_id, community_chain_set in community_chains.items():
                 chains.extend(list(community_chain_set))
+            print(f"Found total of {len(chains)} chains across all communities")
         else:
             print("Using regular chain sampling")
             chains = list(optimized_extract_entity_chains(
@@ -306,6 +313,7 @@ class ComplexRelationshipAgent:
                 self.chain_length,
                 self.n_samples
             ))
+            print(f"Found {len(chains)} chains")
         
         # Get entity descriptions
         print("Mapping entities to descriptions...")
@@ -353,46 +361,70 @@ class ComplexRelationshipAgent:
                     else:
                         knowledge_editing_input_dumped = None
 
-                    result_dict = {
-                        "chain": list(chain),
-                        "first_entity": final_state["complex_relationship"].first_entity,
-                        "last_entity": final_state["complex_relationship"].last_entity,
-                        "entity_descriptions": {
+                    # Create ComplexRelationshipResult
+                    result = ComplexRelationshipResult(
+                        chain=list(chain),
+                        first_entity=final_state["complex_relationship"].first_entity,
+                        last_entity=final_state["complex_relationship"].last_entity,
+                        entity_descriptions={
                             entity: desc["description"]
                             for entity, desc in entity_descriptions.items()
                             if entity in chain
                         },
-                        "relationship_descriptions": [
+                        relationship_descriptions=[
                             f"{source} -> {target}: {rel['description']}"
                             for (source, target), rel in relationships.items()
                             if source in chain and target in chain
                         ],
-                        "inferred_relationships": final_state["complex_relationship"].relationships,
-                        "evidence": final_state["complex_relationship"].evidence,
-                        "knowledge_editing_input": knowledge_editing_input_dumped
-                    }
+                        inferred_relationships=[
+                            InferredRelationship(
+                                relationship=rel,
+                                evidence=final_state["complex_relationship"].evidence,
+                                score=float(final_state["complex_relationship"].score) if hasattr(final_state["complex_relationship"], "score") else 0.0,
+                                reasoning=final_state["complex_relationship"].reasoning if hasattr(final_state["complex_relationship"], "reasoning") else "No reasoning provided"
+                            )
+                            for rel in final_state["complex_relationship"].relationships
+                        ]
+                    )
+                    
+                    # Convert to dictionary and add additional fields
+                    result_dict = result.model_dump()
+                    result_dict["evidence"] = final_state["complex_relationship"].evidence
+                    result_dict["knowledge_editing_input"] = knowledge_editing_input_dumped
                     
                     batch_results.append(result_dict)
                 except Exception as e:
                     print(f"Error processing chain {chain}: {str(e)}")
                     # Add a default result for failed chains
-                    result_dict = {
-                        "chain": list(chain),
-                        "first_entity": chain[0],
-                        "last_entity": chain[-1],
-                        "entity_descriptions": {},
-                        "relationship_descriptions": [],
-                        "inferred_relationships": ["no_relationship"],
-                        "evidence": [],
-                        "knowledge_editing_input": None
-                    }
+                    result = ComplexRelationshipResult(
+                        chain=list(chain),
+                        first_entity=chain[0],
+                        last_entity=chain[-1],
+                        entity_descriptions={},
+                        relationship_descriptions=[],
+                        inferred_relationships=[
+                            InferredRelationship(
+                                relationship="no_relationship",
+                                evidence=[],
+                                score=0.0,
+                                reasoning=f"Error occurred while processing chain: {str(e)}"
+                            )
+                        ]
+                    )
+                    result_dict = result.model_dump()
+                    result_dict["evidence"] = []
+                    result_dict["knowledge_editing_input"] = None
                     batch_results.append(result_dict)
             
             results.extend(batch_results)
         
-        # Save results to JSON file
+        # Save results to JSON file with dataset name, sampling type, and chain length
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = os.path.join(self.output_dir, f"complex_agent_result_{timestamp}.json")
+        sampling_type = "community" if self.use_communities else "regular"
+        output_file = os.path.join(
+            self.output_dir,
+            f"complex_agent_result_{self.dataset_name}_{sampling_type}_chain{self.chain_length}_{timestamp}.json"
+        )
         with open(output_file, 'w') as f:
             json.dump(results, f, indent=2)
         print(f"Results saved to {output_file}")

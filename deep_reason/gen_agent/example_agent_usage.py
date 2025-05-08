@@ -16,33 +16,35 @@ async def main():
     )
     
     # Example 1: Regular chain sampling
-    print("\nExample 1: Regular chain sampling")
-    agent = ComplexRelationshipAgent(
-        llm=llm,
-        graphml_path="datasets/graphs/tat_data_3/output/graph.graphml",
-        entities_parquet_path="datasets/graphs/tat_data_3/output/entities.parquet",
-        relationships_parquet_path="datasets/graphs/tat_data_3/output/relationships.parquet",
-        chain_length=3,
-        n_samples=2
-    )
+    # print("\nExample 1: Regular chain sampling")
+    # agent = ComplexRelationshipAgent(
+    #     llm=llm,
+    #     graphml_path="datasets/graphs/tat_data_3/output/graph.graphml",
+    #     entities_parquet_path="datasets/graphs/tat_data_3/output/entities.parquet",
+    #     relationships_parquet_path="datasets/graphs/tat_data_3/output/relationships.parquet",
+    #     chain_length=3,
+    #     n_samples=2,
+    #     dataset_name="tat_data_3"
+    # )
     
-    # Infer relationships and prepare knowledge editing inputs
-    results = await agent.infer_relationships()
-    print_results(results)
+    # # Infer relationships and prepare knowledge editing inputs
+    # results = await agent.infer_relationships()
+    # print_results(results)
     
     # Example 2: Community-based sampling
     print("\nExample 2: Community-based sampling")
     agent = ComplexRelationshipAgent(
         llm=llm,
-        graphml_path="datasets/graphs/tat_data_3/output/graph.graphml",
-        entities_parquet_path="datasets/graphs/tat_data_3/output/entities.parquet",
-        relationships_parquet_path="datasets/graphs/tat_data_3/output/relationships.parquet",
+        graphml_path="datasets/graphs/obliqa-full/output/graph.graphml",
+        entities_parquet_path="datasets/graphs/obliqa-full/output/entities.parquet",
+        relationships_parquet_path="datasets/graphs/obliqa-full/output/relationships.parquet",
         chain_length=3,
         n_samples=2,  # This will be ignored when use_communities is True
         use_communities=True,
-        communities_parquet_path="datasets/graphs/tat_data_3/output/communities.parquet",
+        communities_parquet_path="datasets/graphs/obliqa-full/output/communities.parquet",
         n_communities=2,
-        n_samples_per_community=1
+        n_samples_per_community=2,
+        dataset_name="obliqa-full"
     )
     
     # Infer relationships and prepare knowledge editing inputs
