@@ -35,16 +35,16 @@ async def main():
     print("\nExample 2: Community-based sampling")
     agent = ComplexRelationshipAgent(
         llm=llm,
-        graphml_path="datasets/graphs/obliqa-full/output/graph.graphml",
-        entities_parquet_path="datasets/graphs/obliqa-full/output/entities.parquet",
-        relationships_parquet_path="datasets/graphs/obliqa-full/output/relationships.parquet",
+        graphml_path="datasets/graphs/tat_drilling/output/graph.graphml",
+        entities_parquet_path="datasets/graphs/tat_drilling/output/entities.parquet",
+        relationships_parquet_path="datasets/graphs/tat_drilling/output/relationships.parquet",
         chain_length=3,
         n_samples=2,  # This will be ignored when use_communities is True
         use_communities=True,
-        communities_parquet_path="datasets/graphs/obliqa-full/output/communities.parquet",
-        n_communities=2,
-        n_samples_per_community=2,
-        dataset_name="obliqa-full"
+        communities_parquet_path="datasets/graphs/tat_drilling/output/communities.parquet",
+        n_communities=3,
+        n_samples_per_community=None,
+        dataset_name="tat_drilling"
     )
     
     # Infer relationships and prepare knowledge editing inputs
