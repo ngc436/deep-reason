@@ -81,8 +81,12 @@ def set_cuda_device(device_id: Optional[int] = None):
     if device_id not in available_devices:
         raise DeviceError(f"CUDA device {device_id} is not available. Available devices: {available_devices}")
     
-    torch.cuda.set_device(device_id)
-    logger.info(f"Using CUDA device: {device_id} ({torch.cuda.get_device_name(device_id)})")
+    # Set CUDA_VISIBLE_DEVICES environment variable
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(device_id)
+    
+    # Reset CUDA device after setting environment variable
+    torch.cuda.set_device(0)  # Now 0 refers to the selected device
+    logger.info(f"Using CUDA device: {device_id} ({torch.cuda.get_device_name(0)})")
 
 def clear_gpu_memory():
     """Clear GPU memory and run garbage collection."""
@@ -128,14 +132,14 @@ class KnowledgeEditor:
             self.tokenizer.padding_side = 'left'
             logger.info("Tokenizer loaded successfully")
             
-            # Get current device
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            # Get current device - now always 0 since we set CUDA_VISIBLE_DEVICES
+            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
             logger.info(f"Loading model on device: {device}")
             
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
                 torch_dtype=torch.float16,
-                device_map="auto",
+                device_map={"": device},  # Map all model parameters to the specified device
                 trust_remote_code=True
             )
             logger.info("Model loaded successfully")
@@ -192,143 +196,6 @@ class KnowledgeEditor:
                 if missing_fields:
                     raise DatasetError(f"Missing required fields in edit input: {missing_fields}")
 
-    def prepare_edit_data(self, edit_input: Dict[str, Any]) -> Dict[str, Any]:
-        """Prepare edit data from knowledge_editing_input."""
-        # Convert all string inputs to lowercase first
-        edit_input = {k: v.lower() if isinstance(v, str) else v for k, v in edit_input.items()}
-        
-        logger.debug(f"Preparing edit data for prompt: {edit_input['edit_prompt']}")
-        
-        # Handle locality data
-        locality = edit_input.get("locality", {})
-        loc_prompt = ""
-        if locality and isinstance(locality, dict):
-            # Convert locality data to lowercase
-            locality = {k: v.lower() if isinstance(v, str) else v for k, v in locality.items()}
-            # Format locality data for WISE
-            if "locality_prompt" in locality and "locality_answer" in locality:
-                loc_prompt = locality["locality_prompt"]  # Remove "nq question:" prefix
-                locality = [{
-                    "prompt": locality["locality_prompt"],
-                    "ground_truth": locality["locality_answer"]
-                }]
-        
-        # Format rephrase prompts and convert to lowercase
-        rephrase = edit_input.get("rephrase", [])
-        if isinstance(rephrase, str):
-            rephrase = [rephrase.lower()]
-        elif isinstance(rephrase, list):
-            rephrase = [p.lower() if isinstance(p, str) else p for p in rephrase]
-
-        # Prepare the edit data with WISE-required fields
-        edit_data = {
-            "prompt": edit_input["edit_prompt"].lower(),
-            "subject": edit_input["subject"].lower(),
-            "target": edit_input["target"].lower(),  # Keep as 'target' to match input
-            "rephrase": rephrase,  # Keep as 'rephrase' to match input
-            "locality": locality,
-            "loc_prompt": loc_prompt.lower(),  # Directly include without prefix
-            "portability": {
-                "prompt": edit_input.get("portability_prompt", "").lower()
-            }
-        }
-        
-        # Handle generalization data
-        if "generalization" in edit_input:
-            generalization = edit_input["generalization"]
-            if isinstance(generalization, dict):
-                generalization = {k: v.lower() if isinstance(v, str) else v for k, v in generalization.items()}
-            edit_data["generalization"] = generalization
-        
-        logger.debug(f"Prepared edit data: {json.dumps(edit_data, indent=2)}")
-        return edit_data
-
-    def validate_edit_result(self, metrics: Dict[str, Any], method: str) -> bool:
-        """Validate the quality of edit results.
-        
-        Args:
-            metrics: Metrics from the edit operation.
-            method: Name of the editing method.
-            
-        Returns:
-            True if the edit was successful, False otherwise.
-        """
-        if not metrics:
-            logger.warning(f"No metrics returned for {method}")
-            return False
-            
-        # Handle nested metrics structure
-        if isinstance(metrics, list) and len(metrics) > 0:
-            metrics = metrics[0]  # Take first result if it's a list
-            
-        if 'post' in metrics:
-            metrics = metrics['post']  # Get metrics from post-edit results
-            
-        # Extract rewrite accuracy
-        rewrite_acc = None
-        if 'rewrite_acc' in metrics:
-            rewrite_acc = metrics['rewrite_acc']
-            # Handle list values
-            if isinstance(rewrite_acc, list):
-                rewrite_acc = rewrite_acc[0]  # Take first value if it's a list
-        elif 'rewrite' in metrics and 'acc' in metrics['rewrite']:
-            rewrite_acc = metrics['rewrite']['acc']
-            
-        if rewrite_acc is None:
-            logger.warning(f"Could not find rewrite accuracy in metrics for {method}")
-            return False
-            
-        # Convert rewrite_acc to float if it's a string
-        try:
-            rewrite_acc = float(rewrite_acc)
-        except (ValueError, TypeError):
-            logger.warning(f"Invalid rewrite accuracy value for {method}: {rewrite_acc}")
-            return False
-            
-        # Extract locality accuracy
-        locality_acc = None
-        if 'locality_acc' in metrics:
-            locality_acc = metrics['locality_acc']
-            # Handle list values
-            if isinstance(locality_acc, list):
-                locality_acc = locality_acc[0]  # Take first value if it's a list
-        elif 'locality' in metrics:
-            # Calculate average locality accuracy if it's a dictionary of accuracies
-            acc_values = []
-            for k, v in metrics['locality'].items():
-                if k.endswith('_acc'):
-                    try:
-                        if isinstance(v, list):
-                            v = v[0]  # Take first value if it's a list
-                        acc_values.append(float(v))
-                    except (ValueError, TypeError):
-                        logger.warning(f"Invalid locality accuracy value for {method}: {v}")
-                        continue
-            if acc_values:
-                locality_acc = sum(acc_values) / len(acc_values)
-                
-        if locality_acc is None:
-            logger.warning(f"Could not find locality accuracy in metrics for {method}")
-            return False
-            
-        # Convert locality_acc to float if it's a string
-        try:
-            locality_acc = float(locality_acc)
-        except (ValueError, TypeError):
-            logger.warning(f"Invalid locality accuracy value for {method}: {locality_acc}")
-            return False
-            
-        # Quality thresholds
-        if rewrite_acc < 0.5:
-            logger.warning(f"Low rewrite accuracy for {method}: {rewrite_acc}")
-            return False
-            
-        if locality_acc < 0.5:
-            logger.warning(f"Low locality accuracy for {method}: {locality_acc}")
-            return False
-            
-        return True
-
     def _generate_model_response(self, prompt: str, model=None) -> str:
         """Generate a response from the model for a given prompt.
         
@@ -344,7 +211,10 @@ class KnowledgeEditor:
             
             # Format prompt with Question/Answer format if not already present
             if not prompt.startswith('Question:'):
-                prompt = f'Question:{prompt} Answer:'
+                prompt = f'Question: {prompt} Answer:'
+            
+            # Get the device from the model
+            device = next(model_to_use.parameters()).device
             
             # Tokenize with padding and max length
             inputs = self.tokenizer(
@@ -352,18 +222,20 @@ class KnowledgeEditor:
                 return_tensors="pt",
                 padding=True,
                 max_length=30,
-                # truncation=True
-            ).to(model_to_use.device)
+                truncation=True
+            ).to(device)  # Move inputs to the same device as the model
             
-            # Generate response
+            # Generate response with controlled parameters
             outputs = model_to_use.generate(
                 input_ids=inputs['input_ids'],
                 attention_mask=inputs['attention_mask'],
-                max_new_tokens=15,
-                # do_sample=True,
-                # temperature=0.7,
-                # top_p=0.9,
-                # pad_token_id=self.tokenizer.eos_token_id
+                max_new_tokens=15,  # Limit new tokens
+                temperature=0.7,    # Reduce randomness
+                top_p=0.9,         # Nucleus sampling
+                do_sample=True,    # Enable sampling
+                pad_token_id=self.tokenizer.eos_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
+                early_stopping=True
             )
             
             # Get the max length of input tokens
@@ -371,7 +243,13 @@ class KnowledgeEditor:
             
             # Decode only the new tokens (after the input)
             response = self.tokenizer.decode(outputs[0][max_length:], skip_special_tokens=True)
-            return response.strip()
+            
+            # Clean up response - take only the first sentence or up to a period
+            response = response.split('.')[0].strip()
+            if not response:
+                response = response.split('\n')[0].strip()
+                
+            return response
             
         except Exception as e:
             logger.error(f"Error generating response: {str(e)}")
@@ -419,7 +297,7 @@ class KnowledgeEditor:
                 return_tensors='pt',
                 padding=True,
                 max_length=30,
-                # truncation=True
+                truncation=True
             ).to(model.device)
             
             # Generate responses from both models
@@ -427,20 +305,12 @@ class KnowledgeEditor:
                 input_ids=inputs['input_ids'],
                 attention_mask=inputs['attention_mask'],
                 max_new_tokens=15,
-                # do_sample=True,
-                # temperature=0.7,
-                # top_p=0.9,
-                # pad_token_id=self.tokenizer.eos_token_id
             )
             
             post_edit_outputs = edited_model.generate(
                 input_ids=inputs['input_ids'],
                 attention_mask=inputs['attention_mask'],
                 max_new_tokens=15,
-                # do_sample=True,
-                # temperature=0.7,
-                # top_p=0.9,
-                # pad_token_id=self.tokenizer.eos_token_id
             )
             
             # Get the max length of input tokens
@@ -565,6 +435,55 @@ class KnowledgeEditor:
             
         return quality_metrics
 
+    def _test_rephrase_examples(self, model, rephrase_prompts: List[str]) -> List[str]:
+        """Test model responses on rephrase examples.
+        
+        Args:
+            model: Model to test
+            rephrase_prompts: List of rephrased prompts to test
+            
+        Returns:
+            List of model responses for each rephrase prompt
+        """
+        responses = []
+        for prompt in rephrase_prompts:
+            response = self._generate_model_response(prompt, model=model)
+            responses.append(response)
+        return responses
+
+    def _test_generalization_prompt(self, model, generalization_data: Dict[str, Any]) -> str:
+        """Test model response on generalization prompt.
+        
+        Args:
+            model: Model to test
+            generalization_data: Dictionary containing generalization prompt and answer
+            
+        Returns:
+            Model's response to the generalization prompt
+        """
+        if not generalization_data or 'generalization_prompt' not in generalization_data:
+            return "No generalization prompt provided"
+            
+        prompt = generalization_data['generalization_prompt']
+        response = self._generate_model_response(prompt, model=model)
+        return response
+
+    def _test_portability_prompt(self, model, portability_prompt: str) -> str:
+        """Test model response on portability prompt.
+        
+        Args:
+            model: Model to test
+            portability_prompt: Portability prompt to test
+            
+        Returns:
+            Model's response to the portability prompt
+        """
+        if not portability_prompt:
+            return "No portability prompt provided"
+            
+        response = self._generate_model_response(portability_prompt, model=model)
+        return response
+
     def _run_edit_method(self, method_name: str, hparams_path: str, edit_data: Dict[str, Any]) -> Dict[str, Any]:
         """Run a specific editing method.
         
@@ -585,6 +504,25 @@ class KnowledgeEditor:
             # Generate pre-edit response
             pre_edit_response = self._generate_model_response(edit_data['prompt'])
             logger.info(f"Pre-edit response: {pre_edit_response}")
+            
+            # Test pre-edit rephrase examples
+            pre_edit_rephrase_responses = self._test_rephrase_examples(self.model, edit_data['rephrase'])
+            logger.info("Pre-edit rephrase responses:")
+            for prompt, response in zip(edit_data['rephrase'], pre_edit_rephrase_responses):
+                logger.info(f"Prompt: {prompt}")
+                logger.info(f"Response: {response}")
+            
+            # Test pre-edit generalization
+            pre_edit_generalization = self._test_generalization_prompt(self.model, edit_data.get('generalization', {}))
+            logger.info("\nPre-edit generalization:")
+            logger.info(f"Prompt: {edit_data.get('generalization', {}).get('generalization_prompt', 'N/A')}")
+            logger.info(f"Response: {pre_edit_generalization}")
+            
+            # Test pre-edit portability
+            pre_edit_portability = self._test_portability_prompt(self.model, edit_data.get('portability_prompt', ''))
+            logger.info("\nPre-edit portability:")
+            logger.info(f"Prompt: {edit_data.get('portability_prompt', 'N/A')}")
+            logger.info(f"Response: {pre_edit_portability}")
             
             # Debug: Print input data
             logger.debug(f"Edit data: {json.dumps(edit_data, indent=2)}")
@@ -630,7 +568,7 @@ class KnowledgeEditor:
             logger.debug(f"  prompts: {edit_data['prompt']}")
             logger.debug(f"  target: {edit_data['target']}")
             logger.debug(f"  subject: {edit_data['subject']}")
-            logger.debug(f"  rephrase: {edit_data['rephrase']}")
+            logger.debug(f"  rephrase: {edit_data.get('rephrase', '')}")
             logger.debug(f"  loc_prompt: {edit_data.get('loc_prompt', '')}")
             
             try:
@@ -723,6 +661,25 @@ class KnowledgeEditor:
             post_edit_response = self._generate_model_response(post_edit_prompt, model=edited_model)
             logger.info(f"Post-edit response: {post_edit_response}")
             
+            # Test post-edit rephrase examples
+            post_edit_rephrase_responses = self._test_rephrase_examples(edited_model, edit_data['rephrase'])
+            logger.info("Post-edit rephrase responses:")
+            for prompt, response in zip(edit_data['rephrase'], post_edit_rephrase_responses):
+                logger.info(f"Prompt: {prompt}")
+                logger.info(f"Response: {response}")
+            
+            # Test post-edit generalization
+            post_edit_generalization = self._test_generalization_prompt(edited_model, edit_data.get('generalization', {}))
+            logger.info("\nPost-edit generalization:")
+            logger.info(f"Prompt: {edit_data.get('generalization', {}).get('generalization_prompt', 'N/A')}")
+            logger.info(f"Response: {post_edit_generalization}")
+            
+            # Test post-edit portability
+            post_edit_portability = self._test_portability_prompt(edited_model, edit_data.get('portability_prompt', ''))
+            logger.info("\nPost-edit portability:")
+            logger.info(f"Prompt: {edit_data.get('portability_prompt', 'N/A')}")
+            logger.info(f"Response: {post_edit_portability}")
+            
             # Create a dictionary to store metrics and models for quality calculation
             metrics_dict = {
                 "metrics": metrics[0] if isinstance(metrics, list) else metrics,
@@ -743,7 +700,13 @@ class KnowledgeEditor:
                 "metrics": metrics,
                 "quality_metrics": quality_metrics,
                 "pre_edit_response": pre_edit_response,
-                "post_edit_response": post_edit_response
+                "post_edit_response": post_edit_response,
+                "pre_edit_rephrase_responses": pre_edit_rephrase_responses,
+                "post_edit_rephrase_responses": post_edit_rephrase_responses,
+                "pre_edit_generalization": pre_edit_generalization,
+                "post_edit_generalization": post_edit_generalization,
+                "pre_edit_portability": pre_edit_portability,
+                "post_edit_portability": post_edit_portability
             }
         except Exception as e:
             logger.error(f"Error in {method_name} edit: {str(e)}")
@@ -766,4 +729,6 @@ class KnowledgeEditor:
 
     def run_wise_edit(self, edit_data: Dict[str, Any]) -> Dict[str, Any]:
         """Run WISE (Weight-Informed Selective Editing) method."""
-        return self._run_edit_method("WISE", "hparams/WISE/llama3-8b.yaml", edit_data) 
+        # return self._run_edit_method("WISE", "hparams/WISE/llama3-8b.yaml", edit_data)  
+        return self._run_edit_method("WISE", "hparams/WISE/llama3.2-3b.yaml", edit_data)
+        # return self._run_edit_method("WISE", "hparams/WISE/llama3-8b.yaml", edit_data) 
