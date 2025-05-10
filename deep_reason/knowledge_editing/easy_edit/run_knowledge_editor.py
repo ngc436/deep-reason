@@ -4,6 +4,7 @@ import argparse
 from typing import List, Dict, Any
 import torch
 from knowledge_editor import KnowledgeEditor, KnowledgeEditorError, get_available_gpus
+import os
 
 # Set up logging
 logging.basicConfig(
@@ -33,20 +34,24 @@ def process_edits(editor: KnowledgeEditor, data: List[Dict[str, Any]], methods: 
     
     for i, item in enumerate(data):
         for j, edit_input in enumerate(item["knowledge_editing_input"]):
+            edit_input = {k: v.lower() if isinstance(v, str) else v for k, v in edit_input.items()}
             logger.info(f"\nProcessing edit {i+1}/{len(data)}, input {j+1}/{len(item['knowledge_editing_input'])}")
             logger.info(f"Prompt: {edit_input['edit_prompt']}")
             logger.info(f"Target: {edit_input['target']}")
             logger.info(f"Subject: {edit_input['subject']}")
+
+            generalization = edit_input.get("generalization", {})
+            locality = edit_input.get("locality", {})
             
             # Prepare edit data with all required fields
             edit_data = {
                 "prompt": edit_input["edit_prompt"],
                 "subject": edit_input["subject"],
                 "target": edit_input["target"],
-                "rephrase": edit_input["rephrase"],
-                "generalization": edit_input.get("generalization", {}),
-                "locality": edit_input.get("locality", {}),
-                "portability_prompt": edit_input.get("portability_prompt", "")
+                "rephrase": [i.lower() for i in edit_input["rephrase"]],
+                "generalization": {k: v.lower() if isinstance(v, str) else v for k, v in generalization.items()},
+                "locality": {k: v.lower() if isinstance(v, str) else v for k, v in locality.items()},
+                "portability_prompt": edit_input.get("portability_prompt", "").lower()
             }
             
             edit_results = []
@@ -65,6 +70,39 @@ def process_edits(editor: KnowledgeEditor, data: List[Dict[str, Any]], methods: 
                     logger.info(f"\n{method} Results:")
                     logger.info(f"Pre-edit response: {result.get('pre_edit_response', 'N/A')}")
                     logger.info(f"Post-edit response: {result.get('post_edit_response', 'N/A')}")
+                    
+                    # Log rephrase responses
+                    logger.info("\nRephrase Examples:")
+                    logger.info("Pre-edit rephrase responses:")
+                    for prompt, response in zip(edit_data['rephrase'], result.get('pre_edit_rephrase_responses', [])):
+                        logger.info(f"Prompt: {prompt}")
+                        logger.info(f"Response: {response}")
+                    
+                    logger.info("\nPost-edit rephrase responses:")
+                    for prompt, response in zip(edit_data['rephrase'], result.get('post_edit_rephrase_responses', [])):
+                        logger.info(f"Prompt: {prompt}")
+                        logger.info(f"Response: {response}")
+                    
+                    # Log generalization responses
+                    logger.info("\nGeneralization Examples:")
+                    logger.info("Pre-edit generalization:")
+                    logger.info(f"Prompt: {edit_data.get('generalization', {}).get('generalization_prompt', 'N/A')}")
+                    logger.info(f"Response: {result.get('pre_edit_generalization', 'N/A')}")
+                    
+                    logger.info("\nPost-edit generalization:")
+                    logger.info(f"Prompt: {edit_data.get('generalization', {}).get('generalization_prompt', 'N/A')}")
+                    logger.info(f"Response: {result.get('post_edit_generalization', 'N/A')}")
+                    
+                    # Log portability responses
+                    logger.info("\nPortability Examples:")
+                    logger.info("Pre-edit portability:")
+                    logger.info(f"Prompt: {edit_data.get('portability_prompt', 'N/A')}")
+                    logger.info(f"Response: {result.get('pre_edit_portability', 'N/A')}")
+                    
+                    logger.info("\nPost-edit portability:")
+                    logger.info(f"Prompt: {edit_data.get('portability_prompt', 'N/A')}")
+                    logger.info(f"Response: {result.get('post_edit_portability', 'N/A')}")
+                    
                     logger.info(f"Success: {result.get('success', False)}")
                     
                     edit_results.append(result)
@@ -83,17 +121,38 @@ def process_edits(editor: KnowledgeEditor, data: List[Dict[str, Any]], methods: 
     
     return results
 
-def save_results(results: List[Dict[str, Any]], output_path: str):
+def save_results(results: List[Dict[str, Any]], output_path: str, method: str, dataset_name: str):
     """Save editing results to a JSON file.
     
     Args:
         results: List of edit results.
-        output_path: Path to save the results.
+        output_path: Base path to save the results.
+        method: Name of the editing method used.
+        dataset_name: Name of the dataset used.
     """
     try:
-        with open(output_path, 'w') as f:
+        # Create results directory if it doesn't exist
+        os.makedirs("results", exist_ok=True)
+        
+        # Extract dataset name from path if not provided
+        if not dataset_name:
+            dataset_name = os.path.splitext(os.path.basename(output_path))[0]
+        
+        # Create filename with method and dataset name
+        filename = f"results/{method}_{dataset_name}_results.json"
+        
+        # Save detailed results
+        with open(filename, 'w') as f:
             json.dump(results, f, indent=2)
-        logger.info(f"Results saved to {output_path}")
+        logger.info(f"Detailed results saved to {filename}")
+        
+        # Save summary statistics
+        stats = calculate_statistics(results)
+        stats_filename = f"results/{method}_{dataset_name}_stats.json"
+        with open(stats_filename, 'w') as f:
+            json.dump(stats, f, indent=2)
+        logger.info(f"Statistics saved to {stats_filename}")
+        
     except Exception as e:
         logger.error(f"Error saving results: {str(e)}")
         raise
@@ -107,26 +166,69 @@ def calculate_statistics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     Returns:
         Dictionary containing statistics.
     """
-    total_edits = len(results)
-    successful_edits = sum(1 for r in results if any(m["success"] for m in r["results"]))
-    
-    method_stats = {}
-    for method in ["ROME", "MEMIT", "IKE", "WISE"]:
-        method_success = sum(1 for r in results if any(
-            m["success"] and m["method"] == method for m in r["results"]
-        ))
-        method_stats[method] = {
-            "total": total_edits,
-            "successful": method_success,
-            "success_rate": method_success / total_edits if total_edits > 0 else 0
+    try:
+        total_edits = len(results)
+        successful_edits = 0
+        
+        # Count successful edits based on quality metrics
+        for r in results:
+            if "results" in r:
+                for method_result in r["results"]:
+                    if isinstance(method_result, dict):
+                        # Check quality metrics for success
+                        quality_metrics = method_result.get("quality_metrics", {})
+                        if quality_metrics:
+                            # Consider an edit successful if it meets minimum quality thresholds
+                            success = (
+                                quality_metrics.get("rewrite_accuracy", 0) >= 0.5 and
+                                quality_metrics.get("locality_accuracy", 0) >= 0.5 and
+                                quality_metrics.get("generalization_accuracy", 0) >= 0.5
+                            )
+                            if success:
+                                successful_edits += 1
+                                break
+        
+        # Calculate method-specific statistics
+        method_stats = {}
+        for method in ["ROME", "MEMIT", "IKE", "WISE"]:
+            method_success = 0
+            for r in results:
+                if "results" in r:
+                    for method_result in r["results"]:
+                        if isinstance(method_result, dict) and method_result.get("method") == method:
+                            quality_metrics = method_result.get("quality_metrics", {})
+                            if quality_metrics:
+                                success = (
+                                    quality_metrics.get("rewrite_accuracy", 0) >= 0.5 and
+                                    quality_metrics.get("locality_accuracy", 0) >= 0.5 and
+                                    quality_metrics.get("generalization_accuracy", 0) >= 0.5
+                                )
+                                if success:
+                                    method_success += 1
+                                    break
+            
+            method_stats[method] = {
+                "total": total_edits,
+                "successful": method_success,
+                "success_rate": method_success / total_edits if total_edits > 0 else 0
+            }
+        
+        return {
+            "total_edits": total_edits,
+            "successful_edits": successful_edits,
+            "overall_success_rate": successful_edits / total_edits if total_edits > 0 else 0,
+            "method_statistics": method_stats
         }
-    
-    return {
-        "total_edits": total_edits,
-        "successful_edits": successful_edits,
-        "overall_success_rate": successful_edits / total_edits if total_edits > 0 else 0,
-        "method_statistics": method_stats
-    }
+    except Exception as e:
+        logger.error(f"Error calculating statistics: {str(e)}")
+        # Return basic statistics in case of error
+        return {
+            "total_edits": len(results),
+            "successful_edits": 0,
+            "overall_success_rate": 0,
+            "method_statistics": {},
+            "error": str(e)
+        }
 
 def print_gpu_info():
     """Print information about available GPUs."""
@@ -171,25 +273,25 @@ def main():
         
         # Load and process dataset
         data = editor.load_dataset(args.dataset)
-        results = process_edits(editor, data, args.methods)
         
-        # Calculate and log statistics
-        stats = calculate_statistics(results)
-        logger.info("Editing Statistics:")
-        logger.info(f"Total edits: {stats['total_edits']}")
-        logger.info(f"Successful edits: {stats['successful_edits']}")
-        logger.info(f"Overall success rate: {stats['overall_success_rate']:.2%}")
+        # Get dataset name from path
+        dataset_name = os.path.splitext(os.path.basename(args.dataset))[0]
         
-        for method, method_stats in stats["method_statistics"].items():
-            if method in args.methods:  # Only show stats for selected methods
-                logger.info(f"\n{method} Statistics:")
-                logger.info(f"  Total: {method_stats['total']}")
-                logger.info(f"  Successful: {method_stats['successful']}")
-                logger.info(f"  Success rate: {method_stats['success_rate']:.2%}")
-        
-        # Save results
-        save_results(results, args.output)
-        
+        # Process each method separately
+        for method in args.methods:
+            logger.info(f"\nProcessing edits using {method} method...")
+            results = process_edits(editor, data, [method])  # Process one method at a time
+            
+            # Calculate and log statistics
+            stats = calculate_statistics(results)
+            logger.info(f"\n{method} Editing Statistics:")
+            logger.info(f"Total edits: {stats['total_edits']}")
+            logger.info(f"Successful edits: {stats['successful_edits']}")
+            logger.info(f"Overall success rate: {stats['overall_success_rate']:.2%}")
+            
+            # Save results for this method
+            save_results(results, args.output, method, dataset_name)
+            
     except KnowledgeEditorError as e:
         logger.error(f"Knowledge editing error: {str(e)}")
         raise
