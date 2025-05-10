@@ -36,6 +36,11 @@ class Generalization(BaseModel):
     generalization_prompt: str = Field(description="The generalization prompt to check that editing is successful with a bit changed edit prompt")
     generalization_answer: str = Field(description="The answer to the generalization prompt")
 
+class Portability(BaseModel):
+    """Model for portability of the edit prompt"""
+    portability_prompt: str = Field(description="The portability prompt to measure success for reasoning or application")
+    portability_answer: str = Field(description="The answer to the portability prompt")
+
 class KnowledgeEditingInput(BaseModel):
     """Model for the input data for knowledge editing"""
     edit_prompt: str = Field(description="Input prompt in a form of question where answer is one of the entities")
@@ -43,5 +48,5 @@ class KnowledgeEditingInput(BaseModel):
     target: str = Field(description="The actual answer to the edit prompt that is one of the entities")
     generalization: Generalization = Field(description="The generalization of the edit prompt")
     locality: Locality = Field(description="The locality of the edit prompt")
-    portability_prompt: str = Field(description="The portability prompt to measure success for reasoning or application") 
+    portability: Portability = Field(description="The portability of the edit prompt")
     rephrase: List[str] = Field(description="Alternative ways to phrase the edit prompt")

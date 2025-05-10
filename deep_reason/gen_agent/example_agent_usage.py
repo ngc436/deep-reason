@@ -35,16 +35,16 @@ async def main():
     print("\nExample 2: Community-based sampling")
     agent = ComplexRelationshipAgent(
         llm=llm,
-        graphml_path="datasets/graphs/tat_drilling/output/graph.graphml",
-        entities_parquet_path="datasets/graphs/tat_drilling/output/entities.parquet",
-        relationships_parquet_path="datasets/graphs/tat_drilling/output/relationships.parquet",
+        graphml_path="datasets/graphs/obliqa-full/output/graph.graphml",
+        entities_parquet_path="datasets/graphs/obliqa-full/output/entities.parquet",
+        relationships_parquet_path="datasets/graphs/obliqa-full/output/relationships.parquet",
         chain_length=3,
         n_samples=2,  # This will be ignored when use_communities is True
         use_communities=True,
-        communities_parquet_path="datasets/graphs/tat_drilling/output/communities.parquet",
-        n_communities=3,
-        n_samples_per_community=None,
-        dataset_name="tat_drilling"
+        communities_parquet_path="datasets/graphs/obliqa-full/output/communities.parquet",
+        n_communities=1,
+        n_samples_per_community=2,
+        dataset_name="obliqa-full"
     )
     
     # Infer relationships and prepare knowledge editing inputs
@@ -86,7 +86,9 @@ def print_results(results):
                 print(f"    Locality:")
                 print(f"      Prompt: {ei['locality']['locality_prompt']}")
                 print(f"      Answer: {ei['locality']['locality_answer']}")
-                print(f"    Portability Prompt: {ei['portability_prompt']}")
+                print(f"    Portability:")
+                print(f"      Prompt: {ei['portability']['portability_prompt']}")
+                print(f"      Answer: {ei['portability']['portability_answer']}")
                 print(f"    Rephrase:")
                 for rephrase in ei['rephrase']:
                     print(f"      - {rephrase}")
@@ -100,7 +102,9 @@ def print_results(results):
             print(f"  Locality:")
             print(f"    Prompt: {editing_input['locality']['locality_prompt']}")
             print(f"    Answer: {editing_input['locality']['locality_answer']}")
-            print(f"  Portability Prompt: {editing_input['portability_prompt']}")
+            print(f"  Portability:")
+            print(f"    Prompt: {editing_input['portability']['portability_prompt']}")
+            print(f"    Answer: {editing_input['portability']['portability_answer']}")
             print(f"  Rephrase:")
             for rephrase in editing_input['rephrase']:
                 print(f"    - {rephrase}")

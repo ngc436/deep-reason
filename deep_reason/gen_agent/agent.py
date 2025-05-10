@@ -21,7 +21,8 @@ from deep_reason.gen_agent.scheme import (
     KnowledgeEditingInput,
     InferredRelationship,
     Generalization,
-    Locality
+    Locality,
+    Portability
 )
 
 
@@ -233,6 +234,15 @@ class ComplexRelationshipAgent:
                             locality_answer=data.get('locality_answer', '')
                         )
                 
+                if 'portability' in data:
+                    if isinstance(data['portability'], dict):
+                        data['portability'] = Portability(**data['portability'])
+                    else:
+                        data['portability'] = Portability(
+                            portability_prompt=data.get('portability_prompt', ''),
+                            portability_answer=data.get('portability_answer', '')
+                        )
+                
                 # Ensure rephrase is a list
                 if 'rephrase' not in data:
                     data['rephrase'] = []
@@ -329,18 +339,26 @@ class ComplexRelationshipAgent:
                 self.n_communities,
                 self.n_samples_per_community
             )
-            # Flatten community chains into a single list
+            # Flatten community chains into a single list while preserving community IDs
             chains = []
+            chain_to_community = {}  # Map to store chain -> community_id mapping
             for community_id, community_chain_set in community_chains.items():
-                chains.extend(list(community_chain_set))
+                for chain in community_chain_set:
+                    # Convert chain entities to lowercase
+                    lower_chain = tuple(entity.lower() for entity in chain)
+                    chains.append(lower_chain)
+                    chain_to_community[lower_chain] = community_id
             print(f"Found total of {len(chains)} chains across all communities")
         else:
             print("Using regular chain sampling")
-            chains = list(optimized_extract_entity_chains(
+            raw_chains = list(optimized_extract_entity_chains(
                 self.graphml_path,
                 self.chain_length,
                 self.n_samples
             ))
+            # Convert chain entities to lowercase
+            chains = [tuple(entity.lower() for entity in chain) for chain in raw_chains]
+            chain_to_community = {}  # Empty dict for regular sampling
             print(f"Found {len(chains)} chains")
         
         # Get entity descriptions
@@ -419,6 +437,8 @@ class ComplexRelationshipAgent:
                     result_dict = result.model_dump()
                     result_dict["evidence"] = final_state["complex_relationship"].evidence
                     result_dict["knowledge_editing_input"] = knowledge_editing_input_dumped
+                    # Add community_id if available
+                    result_dict["community_id"] = chain_to_community.get(tuple(chain)) if self.use_communities else None
                     
                     batch_results.append(result_dict)
                 except Exception as e:
@@ -442,6 +462,7 @@ class ComplexRelationshipAgent:
                     result_dict = result.model_dump()
                     result_dict["evidence"] = []
                     result_dict["knowledge_editing_input"] = None
+                    result_dict["community_id"] = None
                     batch_results.append(result_dict)
             
             results.extend(batch_results)
