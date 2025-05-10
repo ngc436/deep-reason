@@ -204,16 +204,24 @@ class ComplexRelationshipAgent:
                 if hasattr(output, 'content'):
                     output = output.content
                 
-                # Try to parse as JSON first
+                # Clean the output string
                 json_str = output.strip()
-                if not json_str.startswith('{'):
-                    # If not starting with {, try to find JSON in the output
-                    start = json_str.find('{')
-                    end = json_str.rfind('}') + 1
-                    if start >= 0 and end > start:
-                        json_str = json_str[start:end]
                 
-                data = json.loads(json_str)
+                # Remove any text before the first { and after the last }
+                start = json_str.find('{')
+                end = json_str.rfind('}') + 1
+                if start >= 0 and end > start:
+                    json_str = json_str[start:end]
+                else:
+                    raise ValueError("No valid JSON object found in the output")
+                
+                # Try to parse the JSON
+                try:
+                    data = json.loads(json_str)
+                except json.JSONDecodeError as e:
+                    print(f"JSON parsing error: {str(e)}")
+                    print(f"Problematic JSON string: {json_str}")
+                    raise
                 
                 # Ensure generalization and locality are properly structured
                 if 'generalization' in data:
@@ -233,7 +241,7 @@ class ComplexRelationshipAgent:
                             locality_prompt=data.get('locality_prompt', ''),
                             locality_answer=data.get('locality_answer', '')
                         )
-                
+
                 if 'portability' in data:
                     if isinstance(data['portability'], dict):
                         data['portability'] = Portability(**data['portability'])
@@ -261,17 +269,23 @@ class ComplexRelationshipAgent:
                         Previous response:
                         {output}
                         
+                        Error message:
+                        {error}
+                        
                         Please provide a valid JSON response that strictly follows the schema.
+                        The response must be a valid JSON object starting with {{ and ending with }}.
+                        Do not include any text before or after the JSON object.
                         """
                     )
                     retry_chain = retry_prompt | self.llm
                     output = await retry_chain.ainvoke({
                         "schema": KnowledgeEditingInput.model_json_schema(),
-                        "output": output
+                        "output": output,
+                        "error": str(e)
                     })
                     continue
                 else:
-                    raise ValueError(f"Failed to parse knowledge editing input after {self.max_retries} attempts")
+                    raise ValueError(f"Failed to parse knowledge editing input after {self.max_retries} attempts: {str(e)}")
     
     async def _parse_relationship_output_with_retry(self, output: Any) -> ComplexRelationship:
         """Parse the LLM output for complex relationships with retry logic"""

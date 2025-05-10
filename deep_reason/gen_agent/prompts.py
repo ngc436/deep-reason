@@ -31,11 +31,22 @@ You are an AI assistant that helps a human in preparing input data for knowledge
 Your goal is to make input examples that will be used for editing and checking editing success.
 From ENTITIES (main entities in the text), RELATIONSHIP between entities and DESCRIPTION of the entities prepare: 
 1) edit_prompt - an input relationship converted to a question where answer is one of the entities
-2) subject - subject of the question
+2) subject - subject of the question that points to the target entity
 3) target - entity which is the answer to edit_prompt
-4) generalization_prompt - prompt-question that is a reformulated edit_prompt to measure the success rate of editing withing the editing scope
-5) locality_prompt - prompt-question that checks whether the model's output changes after editing for unrelated inputs. Here you should come up with some general knowledge connected to the edit_prompt
-6) portability_prompt - prompt-question that helps to measure the success rate of editing for reasoning/application(one hop, synonym, logical generalization)
+4) generalization - contains:
+   - generalization_prompt: a reformulated edit_prompt to measure the success rate of editing within the editing scope
+   - generalization_answer: the expected answer to the generalization prompt
+5) locality - contains:
+   - locality_prompt: prompt-question that checks whether the model's output changes after editing for unrelated inputs
+   - locality_answer: the expected answer to the locality prompt
+6) portability - contains:
+   - portability_prompt: prompt-question that helps to measure the success rate of editing for reasoning/application
+   - portability_answer: the expected answer to the portability prompt
+7) rephrase - alternative ways to phrase the edit prompt
+
+IMPORTANT: Your response must be a valid JSON object. Do not include any text before or after the JSON object.
+The JSON object must start with {{ and end with }}. All strings must be properly quoted.
+
 Look carefully at provided example below that provide understanding of how the input should look like.
 
 # Example
@@ -45,12 +56,26 @@ RELATIONSHIP: The current President of the United States is Donald Trump.
 DESCRIPTION: Donald Trump, was born on June 14, 1946, in Queens, New York City, New York. The capital of the United States is Washington, D.C. (short for District of Columbia).
 ## Output
 {{
-	"edit_prompt": "Who is the current President of the United States?",
-	"subject": "President",
-	"target": "Donald Trump",
-	"generalization_prompt": "What is the name of the current President of the United States?", 
-	"locality_prompt": "Where is the capital of the United States?",
-	"portability_prompt": "Where is the current U.S. President born?"
+    "edit_prompt": "Who is the current President of the United States?",
+    "subject": "President",
+    "target": "Donald Trump",
+    "generalization": {{
+        "generalization_prompt": "What is the name of the current President of the United States?",
+        "generalization_answer": "Donald Trump"
+    }},
+    "locality": {{
+        "locality_prompt": "Where is the capital of the United States?",
+        "locality_answer": "Washington, D.C."
+    }},
+    "portability": {{
+        "portability_prompt": "Where is the current U.S. President born?",
+        "portability_answer": "Queens, New York City, New York"
+    }},
+    "rephrase": [
+        "Name the current President of the United States",
+        "Who currently holds the office of President in the United States?",
+        "What is the name of the person currently serving as U.S. President?"
+    ]
 }}
 
 # User input
@@ -59,6 +84,8 @@ RELATIONSHIP: {relationships}
 DESCRIPTION: {descriptions}
 
 # Output
-Your answer must strictly follow this JSON schema:
+Strictly use the same language as in the user input. Your answer must be a valid JSON object that strictly follows this schema:
 {schema}
+
+Remember: Your response must be a valid JSON object starting with {{ and ending with }}. Do not include any text before or after the JSON object.
 """
