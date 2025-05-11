@@ -14,11 +14,11 @@ from deep_reason.gen_agent.sampling import (
     map_entities_to_descriptions,
     extract_chain_relationships
 )
-from deep_reason.gen_agent.prompts import COMPLEX_RELATIONSHIPS_PROMPT, PREPARE_FOR_KNOWLEDGE_EDITING_PROMPT
+from deep_reason.gen_agent.prompts import COMPLEX_RELATIONSHIPS_PROMPT, PREPARE_FOR_KNOWLEDGE_EDITING_PROMPT_WIKIDATA_RECENT_TYPE
 from deep_reason.gen_agent.scheme import (
     ComplexRelationship,
     ComplexRelationshipResult,
-    KnowledgeEditingInput,
+    WikidataRecentKnowledgeEditingInput,
     InferredRelationship,
     Generalization,
     Locality,
@@ -32,7 +32,8 @@ class AgentState(TypedDict):
     entity_descriptions: Dict[str, Dict[str, Any]]
     relationships: Dict[Tuple[str, str], Dict[str, Any]]
     complex_relationship: Optional[ComplexRelationship]
-    knowledge_editing_input: Optional[KnowledgeEditingInput]
+    knowledge_editing_input: Optional[WikidataRecentKnowledgeEditingInput]
+    complex_relationship_result: Optional[ComplexRelationshipResult]
 
 class ComplexRelationshipAgent:
     """Agent for inferring complex relationships between chain endpoints"""
@@ -90,7 +91,7 @@ class ComplexRelationshipAgent:
         relationship_parser = PydanticOutputParser(pydantic_object=ComplexRelationship)
         
         # Create the output parser for knowledge editing input
-        editing_parser = PydanticOutputParser(pydantic_object=KnowledgeEditingInput)
+        editing_parser = PydanticOutputParser(pydantic_object=WikidataRecentKnowledgeEditingInput)
         
         # Create the prompt templates
         self.relationship_prompt = PromptTemplate(
@@ -101,7 +102,7 @@ class ComplexRelationshipAgent:
         
         self.editing_prompt = PromptTemplate(
             input_variables=["entities", "relationships", "descriptions"],
-            template=PREPARE_FOR_KNOWLEDGE_EDITING_PROMPT,
+            template=PREPARE_FOR_KNOWLEDGE_EDITING_PROMPT_WIKIDATA_RECENT_TYPE,
             partial_variables={"schema": editing_parser.get_format_instructions()}
         )
         
@@ -196,7 +197,7 @@ class ComplexRelationshipAgent:
         """
         return " -> ".join(chain)
     
-    async def _parse_editing_output_with_retry(self, output: Any) -> KnowledgeEditingInput:
+    async def _parse_editing_output_with_retry(self, output: Any) -> WikidataRecentKnowledgeEditingInput:
         """Parse the LLM output for knowledge editing input with retry logic"""
         for attempt in range(self.max_retries):
             try:
@@ -223,14 +224,15 @@ class ComplexRelationshipAgent:
                     print(f"Problematic JSON string: {json_str}")
                     raise
                 
-                # Ensure generalization and locality are properly structured
-                if 'generalization' in data:
-                    if isinstance(data['generalization'], dict):
-                        data['generalization'] = Generalization(**data['generalization'])
+                # Ensure portability and locality are properly structured
+                if 'portability' in data:
+                    if isinstance(data['portability'], dict):
+                        data['portability'] = Portability(**data['portability'])
                     else:
-                        data['generalization'] = Generalization(
-                            generalization_prompt=data.get('generalization_prompt', ''),
-                            generalization_answer=data.get('generalization_answer', '')
+                        data['portability'] = Portability(
+                            logical_generalization=data.get('logical_generalization', []),
+                            reasoning=data.get('reasoning', []),
+                            subject_aliasing=data.get('subject_aliasing', [])
                         )
                 
                 if 'locality' in data:
@@ -238,26 +240,10 @@ class ComplexRelationshipAgent:
                         data['locality'] = Locality(**data['locality'])
                     else:
                         data['locality'] = Locality(
-                            locality_prompt=data.get('locality_prompt', ''),
-                            locality_answer=data.get('locality_answer', '')
-                        )
-
-                if 'portability' in data:
-                    if isinstance(data['portability'], dict):
-                        data['portability'] = Portability(**data['portability'])
-                    else:
-                        data['portability'] = Portability(
-                            portability_prompt=data.get('portability_prompt', ''),
-                            portability_answer=data.get('portability_answer', '')
+                            relation_specificity=data.get('relation_specificity', [])
                         )
                 
-                # Ensure rephrase is a list
-                if 'rephrase' not in data:
-                    data['rephrase'] = []
-                elif not isinstance(data['rephrase'], list):
-                    data['rephrase'] = [data['rephrase']]
-                
-                return KnowledgeEditingInput(**data)
+                return WikidataRecentKnowledgeEditingInput(**data)
             except (json.JSONDecodeError, ValueError, AttributeError) as e:
                 if attempt < self.max_retries - 1:
                     # If parsing fails, ask the LLM to fix the output
@@ -279,7 +265,7 @@ class ComplexRelationshipAgent:
                     )
                     retry_chain = retry_prompt | self.llm
                     output = await retry_chain.ainvoke({
-                        "schema": KnowledgeEditingInput.model_json_schema(),
+                        "schema": WikidataRecentKnowledgeEditingInput.model_json_schema(),
                         "output": output,
                         "error": str(e)
                     })

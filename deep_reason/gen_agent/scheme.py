@@ -26,20 +26,25 @@ class ComplexRelationshipResult(BaseModel):
     relationship_descriptions: List[str] = Field(description="Descriptions of relationships between consecutive entities")
     inferred_relationships: List[InferredRelationship] = Field(description="Inferred relationships between first and last entities")
 
+class PromptWithGroundTruth(BaseModel):
+    """Model for a prompt with its ground truth answers"""
+    prompt: str = Field(description="The prompt/question")
+    ground_truth: List[str] = Field(description="List of acceptable answer variants", max_items=4)
+
+class Portability(BaseModel):
+    """Model for portability of the edit prompt"""
+    logical_generalization: List[PromptWithGroundTruth] = Field(description="Logical generalization prompts", max_items=2)
+    reasoning: List[PromptWithGroundTruth] = Field(description="Reasoning prompts", max_items=2)
+    subject_aliasing: List[PromptWithGroundTruth] = Field(description="Subject aliasing prompts", max_items=2)
+
 class Locality(BaseModel):
     """Model for locality of the edit prompt"""
-    locality_prompt: str = Field(description="The locality prompt to check that model does not influenced on unrelated to editing inputs (though connected by entity)")
-    locality_answer: str = Field(description="The answer to the locality prompt")
+    relation_specificity: List[PromptWithGroundTruth] = Field(description="Relation specificity prompts", max_items=2)
 
 class Generalization(BaseModel):
     """Model for generalization of the edit prompt"""
     generalization_prompt: str = Field(description="The generalization prompt to check that editing is successful with a bit changed edit prompt")
     generalization_answer: str = Field(description="The answer to the generalization prompt")
-
-class Portability(BaseModel):
-    """Model for portability of the edit prompt"""
-    portability_prompt: str = Field(description="The portability prompt to measure success for reasoning or application")
-    portability_answer: str = Field(description="The answer to the portability prompt")
 
 class KnowledgeEditingInput(BaseModel):
     """Model for the input data for knowledge editing"""
@@ -50,3 +55,11 @@ class KnowledgeEditingInput(BaseModel):
     locality: Locality = Field(description="The locality of the edit prompt")
     portability: Portability = Field(description="The portability of the edit prompt")
     rephrase: List[str] = Field(description="Alternative ways to phrase the edit prompt")
+
+class WikidataRecentKnowledgeEditingInput(BaseModel):
+    """Model for the input data for Wikidata recent type knowledge editing"""
+    subject: str = Field(description="The subject of the question that points to the target entity")
+    prompt: str = Field(description="Input relationship converted to a question where answer is one of the entities")
+    target_new: str = Field(description="The entity which is the answer to the prompt")
+    portability: Portability = Field(description="The portability of the edit prompt")
+    locality: Locality = Field(description="The locality of the edit prompt")

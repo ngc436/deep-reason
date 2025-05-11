@@ -42,8 +42,8 @@ async def main():
         n_samples=2,  # This will be ignored when use_communities is True
         use_communities=True,
         communities_parquet_path="datasets/graphs/obliqa-full/output/communities.parquet",
-        n_communities=1,
-        n_samples_per_community=2,
+        n_communities=5,
+        n_samples_per_community=30,
         dataset_name="obliqa-full"
     )
     
@@ -77,37 +77,49 @@ def print_results(results):
         if isinstance(editing_input, list):
             for idx, ei in enumerate(editing_input):
                 print(f"  Knowledge Editing Input {idx+1}:")
-                print(f"    Edit Prompt: {ei['edit_prompt']}")
                 print(f"    Subject: {ei['subject']}")
-                print(f"    Target: {ei['target']}")
-                print(f"    Generalization:")
-                print(f"      Prompt: {ei['generalization']['generalization_prompt']}")
-                print(f"      Answer: {ei['generalization']['generalization_answer']}")
-                print(f"    Locality:")
-                print(f"      Prompt: {ei['locality']['locality_prompt']}")
-                print(f"      Answer: {ei['locality']['locality_answer']}")
+                print(f"    Prompt: {ei['prompt']}")
+                print(f"    Target New: {ei['target_new']}")
                 print(f"    Portability:")
-                print(f"      Prompt: {ei['portability']['portability_prompt']}")
-                print(f"      Answer: {ei['portability']['portability_answer']}")
-                print(f"    Rephrase:")
-                for rephrase in ei['rephrase']:
-                    print(f"      - {rephrase}")
+                print(f"      Logical Generalization:")
+                for lg in ei['portability']['logical_generalization']:
+                    print(f"        Prompt: {lg['prompt']}")
+                    print(f"        Ground Truth: {lg['ground_truth']}")
+                print(f"      Reasoning:")
+                for r in ei['portability']['reasoning']:
+                    print(f"        Prompt: {r['prompt']}")
+                    print(f"        Ground Truth: {r['ground_truth']}")
+                print(f"      Subject Aliasing:")
+                for sa in ei['portability']['subject_aliasing']:
+                    print(f"        Prompt: {sa['prompt']}")
+                    print(f"        Ground Truth: {sa['ground_truth']}")
+                print(f"    Locality:")
+                print(f"      Relation Specificity:")
+                for rs in ei['locality']['relation_specificity']:
+                    print(f"        Prompt: {rs['prompt']}")
+                    print(f"        Ground Truth: {rs['ground_truth']}")
         elif editing_input is not None:
-            print(f"  Edit Prompt: {editing_input['edit_prompt']}")
             print(f"  Subject: {editing_input['subject']}")
-            print(f"  Target: {editing_input['target']}")
-            print(f"  Generalization:")
-            print(f"    Prompt: {editing_input['generalization']['generalization_prompt']}")
-            print(f"    Answer: {editing_input['generalization']['generalization_answer']}")
-            print(f"  Locality:")
-            print(f"    Prompt: {editing_input['locality']['locality_prompt']}")
-            print(f"    Answer: {editing_input['locality']['locality_answer']}")
+            print(f"  Prompt: {editing_input['prompt']}")
+            print(f"  Target New: {editing_input['target_new']}")
             print(f"  Portability:")
-            print(f"    Prompt: {editing_input['portability']['portability_prompt']}")
-            print(f"    Answer: {editing_input['portability']['portability_answer']}")
-            print(f"  Rephrase:")
-            for rephrase in editing_input['rephrase']:
-                print(f"    - {rephrase}")
+            print(f"    Logical Generalization:")
+            for lg in editing_input['portability']['logical_generalization']:
+                print(f"      Prompt: {lg['prompt']}")
+                print(f"      Ground Truth: {lg['ground_truth']}")
+            print(f"    Reasoning:")
+            for r in editing_input['portability']['reasoning']:
+                print(f"      Prompt: {r['prompt']}")
+                print(f"      Ground Truth: {r['ground_truth']}")
+            print(f"    Subject Aliasing:")
+            for sa in editing_input['portability']['subject_aliasing']:
+                print(f"      Prompt: {sa['prompt']}")
+                print(f"      Ground Truth: {sa['ground_truth']}")
+            print(f"  Locality:")
+            print(f"    Relation Specificity:")
+            for rs in editing_input['locality']['relation_specificity']:
+                print(f"      Prompt: {rs['prompt']}")
+                print(f"      Ground Truth: {rs['ground_truth']}")
         else:
             print("  Knowledge Editing Input: None")
 
