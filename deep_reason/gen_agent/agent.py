@@ -53,6 +53,7 @@ class ComplexRelationshipAgent:
         communities_parquet_path: Optional[str] = None,
         n_communities: Optional[int] = None,
         n_samples_per_community: Optional[int] = None,
+        selected_community_ids: Optional[List[int]] = None,
         dataset_name: str = "unknown"
     ):
         self.llm = llm
@@ -68,14 +69,15 @@ class ComplexRelationshipAgent:
         self.communities_parquet_path = communities_parquet_path
         self.n_communities = n_communities
         self.n_samples_per_community = n_samples_per_community
+        self.selected_community_ids = selected_community_ids
         self.dataset_name = dataset_name
         
         # Validate community-related parameters
         if self.use_communities:
             if not self.communities_parquet_path:
                 raise ValueError("communities_parquet_path must be provided when use_communities is True")
-            if not self.n_communities:
-                raise ValueError("n_communities must be provided when use_communities is True")
+            if not self.selected_community_ids and not self.n_communities:
+                raise ValueError("Either selected_community_ids or n_communities must be provided when use_communities is True")
             # n_samples_per_community can be None to get all possible chains
         
         # Create output directory if it doesn't exist
@@ -182,8 +184,25 @@ class ComplexRelationshipAgent:
     def _format_relationships(self, relationships: Dict[Tuple[str, str], Dict[str, Any]]) -> str:
         """Format relationships for the prompt"""
         formatted = []
+        empty_count = 0
+        total_count = 0
+        
         for (source, target), rel in relationships.items():
-            formatted.append(f"{source} -> {target}: {rel['description']}")
+            total_count += 1
+            if not rel['description']:
+                empty_count += 1
+                print(f"Warning: Empty relationship description for {source} -> {target}")
+                # Try to find a default description based on the relationship type
+                if 'human_readable_id' in rel and rel['human_readable_id']:
+                    formatted.append(f"{source} -> {target}: {rel['human_readable_id']}")
+                else:
+                    formatted.append(f"{source} -> {target}: connected")
+            else:
+                formatted.append(f"{source} -> {target}: {rel['description']}")
+        
+        if empty_count > 0:
+            print(f"Found {empty_count} empty relationships out of {total_count} total relationships")
+        
         return "\n".join(formatted)
     
     def _format_entity_chain(self, chain: List[str]) -> str:
@@ -327,7 +346,11 @@ class ComplexRelationshipAgent:
         # Sample chains based on configuration
         print("Sampling entity chains...")
         if self.use_communities:
-            print(f"Using community-based sampling with {self.n_communities} communities")
+            print(f"Using community-based sampling")
+            if self.selected_community_ids:
+                print(f"Using {len(self.selected_community_ids)} specific community IDs")
+            else:
+                print(f"Using {self.n_communities} random communities")
             if self.n_samples_per_community is None:
                 print("Getting all possible chains per community")
             else:
@@ -337,7 +360,8 @@ class ComplexRelationshipAgent:
                 self.communities_parquet_path,
                 self.chain_length,
                 self.n_communities,
-                self.n_samples_per_community
+                self.n_samples_per_community,
+                self.selected_community_ids
             )
             # Flatten community chains into a single list while preserving community IDs
             chains = []

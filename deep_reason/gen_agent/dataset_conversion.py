@@ -49,6 +49,9 @@ def convert_agent_results_to_editing_dataset(
             if "prompt" in observation:
                 observation["prompt"] = observation["prompt"].lower()
             
+            if "subject" in observation:
+                observation["subject"] = observation["subject"].lower()
+            
             # Skip if subject is not a substring of prompt
             if "subject" in observation and "prompt" in observation:
                 if observation["subject"].lower() not in observation["prompt"].lower():
@@ -93,4 +96,64 @@ def convert_agent_results_to_editing_dataset(
     
     return output_file
 
-convert_agent_results_to_editing_dataset('results/complex_agent_result_obliqa-full_community_chain3_20250511_155757.json')
+def convert_dataset_to_kblam_format(input_file: str, output_file: str):
+    # name: name of entity, example "FERC"
+    # description_type: the name of the property, example "purpose"
+    # description: the value of the property, example "regulatory body"
+    # Q: A question based on the triple, example "What is the purpose of FERC?"
+    # A: An answer based on the triple, example "The purpose of FERC is regulatory body."
+    # key_string: The key used in KBLaM (created with a template of "The {property name} of {entity name}")
+    # example: "the purpose of FERC"
+    with open(input_file, 'r') as f:
+        data = json.load(f)
+    
+    converted_data = []
+    for result in data:
+        observation = {
+            "name": result["target_new"],
+            "description_type": result["subject"],
+            "description": result["description"],
+            "Q": result["Q"],
+            "A": result["A"],
+            "key_string": result["key_string"]
+        }
+        pass
+    
+# [
+#   {
+#     "name": "Enron",
+#     "description_type": "purpose",
+#     "description": "promoted Dabhol Power Company",
+#     "Q": "What is the purpose of Enron?",
+#     "A": "The purpose of Enron is promoted Dabhol Power Company.",
+#     "key_string": "the purpose of Enron"
+#   },
+#   {
+#     "name": "Enron",
+#     "description_type": "objectives",
+#     "description": "result in fairer and more efficient markets",
+#     "Q": "What is the objectives of Enron?",
+#     "A": "The objectives of Enron is result in fairer and more efficient markets.",
+#     "key_string": "the objectives of Enron"
+#   },
+#   {
+#     "name": "Enron",
+#     "description_type": "description",
+#     "description": "organization that includes other Enron affiliates in contract definitions",
+#     "Q": "What is the description of Enron?",
+#     "A": "The description of Enron is organization that includes other Enron affiliates in contract definitions.",
+#     "key_string": "the description of Enron"
+#   },
+#   {
+#     "name": "FERC",
+#     "description_type": "purpose",
+#     "description": "regulatory body",
+#     "Q": "What is the purpose of FERC?",
+#     "A": "The purpose of FERC is regulatory body.",
+#     "key_string": "the purpose of FERC"
+#   }
+# ]
+
+    raise NotImplementedError("Not implemented yet")
+
+convert_agent_results_to_editing_dataset('results/complex_agent_result_tat_personalii_2_community_chain4_20250512_161559.json')
