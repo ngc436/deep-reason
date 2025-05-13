@@ -19,26 +19,6 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 
-# web_tool = WebSearchTool(
-#         agent_id=web_tool_id,
-#         stream_events=tool_streaming,
-#         model="/model",
-#         model_kwargs={
-#             "temperature": 0,
-#             "top_p": 0.95,
-#             "max_tokens": 1024,
-#             "openai_api_key": "token-abc123",
-#             "openai_api_base": llm_props.llm_serving_url
-#         },
-#         retrievers="yandex",
-#         tokenizer=llm_props.llm_tokenizer_path,
-#         fast_search=True,
-#         model_type=llm_props.llm_type,
-#         embeddings=embeddings,
-#         langfuse_handler=langfuse_handler,
-#         callback=tool_callback,
-#     )
-
 class KgConstructionPipeline:
     def __init__(self, **model_kwargs):
         self.llm = VLLMChatOpenAI(
