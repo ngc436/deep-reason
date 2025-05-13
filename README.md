@@ -1,6 +1,9 @@
 # deep-reason
 WIP: DeepReason library for knowledge extraction and editing
 
+> [!WARNING]  
+> This repository is under active development, we plan to make a release version soon
+
 # Installation
 
 ```bash
