@@ -197,7 +197,7 @@ def map_entities_to_descriptions(entity_chains: Set[Tuple[str, ...]], parquet_pa
     # Map each entity to its description
     for entity in unique_entities:
         # Find matching row in the dataframe
-        matching_rows = df[df['title'] == entity]
+        matching_rows = df[df['title'].str.lower() == entity.lower()]
         
         if not matching_rows.empty:
             # Get the first matching row
@@ -233,78 +233,119 @@ def extract_chain_relationships(entity_chains: Set[Tuple[str, ...]], relationshi
     Returns:
         Dict[Tuple[str, str], Dict[str, Any]]: Dictionary mapping pairs of neighboring entities to their relationship details
     """
-    # Read the relationships parquet file
-    df = pd.read_parquet(relationships_parquet_path)
-    
-    # Create a dictionary to store relationships
-    relationships = {}
-    
-    # Process each chain
-    for chain in entity_chains:
-        # Get all pairs of neighboring entities in the chain
-        for i in range(len(chain) - 1):
-            source = chain[i]
-            target = chain[i + 1]
-            
-            # Find matching relationships in the dataframe
-            matching_relationships = df[
-                (df['source'] == source) & 
-                (df['target'] == target)
-            ]
-            
-            if not matching_relationships.empty:
-                # Get the first matching relationship
-                relationship = matching_relationships.iloc[0]
-                # Store the relationship with all available fields
-                relationships[(source, target)] = {
-                    'id': relationship['id'],
-                    'human_readable_id': relationship['human_readable_id'],
-                    'source': relationship['source'],
-                    'target': relationship['target'],
-                    'description': relationship['description'],
-                    'weight': relationship['weight'],
-                    'combined_degree': relationship['combined_degree'],
-                    'text_unit_ids': relationship['text_unit_ids']
-                }
-            else:
-                # If no relationship found, create an empty entry
-                relationships[(source, target)] = {
-                    'id': '',
-                    'human_readable_id': '',
-                    'source': source,
-                    'target': target,
-                    'description': '',
-                    'weight': 0,
-                    'combined_degree': 0,
-                    'text_unit_ids': []
-                }
-    
-    return relationships
+    try:
+        # Read the relationships parquet file
+        print(f"Reading relationships from {relationships_parquet_path}")
+        df = pd.read_parquet(relationships_parquet_path)
+        print(f"Loaded {len(df)} relationships")
+        
+        # Print column names and first few rows for debugging
+        print("Columns in relationships file:", df.columns.tolist())
+        print("\nFirst few rows of relationships:")
+        print(df.head())
+        
+        # Check for missing values
+        missing_values = df.isnull().sum()
+        print("\nMissing values per column:")
+        print(missing_values)
+        
+        # Convert source and target columns to lowercase for case-insensitive matching
+        df['source_lower'] = df['source'].str.lower()
+        df['target_lower'] = df['target'].str.lower()
+        
+        # Create a dictionary to store relationships
+        relationships = {}
+        
+        # Process each chain
+        for chain in entity_chains:
+            # Get all pairs of neighboring entities in the chain
+            for i in range(len(chain) - 1):
+                source = chain[i]
+                target = chain[i + 1]
+                
+                if not source or not target:
+                    print(f"Warning: Invalid chain segment - source: '{source}', target: '{target}'")
+                    continue
+                
+                # Find matching relationships in the dataframe using case-insensitive matching
+                matching_relationships = df[
+                    (df['source_lower'] == source.lower()) & 
+                    (df['target_lower'] == target.lower())
+                ]
+                
+                if not matching_relationships.empty:
+                    # Get the first matching relationship
+                    relationship = matching_relationships.iloc[0]
+                    # Store the relationship with all available fields
+                    relationships[(source, target)] = {
+                        'id': relationship['id'],
+                        'human_readable_id': relationship['human_readable_id'],
+                        'source': relationship['source'],
+                        'target': relationship['target'],
+                        'description': relationship['description'],
+                        'weight': relationship['weight'],
+                        'combined_degree': relationship['combined_degree'],
+                        'text_unit_ids': relationship['text_unit_ids']
+                    }
+                else:
+                    # Try reverse direction
+                    reverse_matching = df[
+                        (df['source_lower'] == target.lower()) & 
+                        (df['target_lower'] == source.lower())
+                    ]
+                    
+                    if not reverse_matching.empty:
+                        relationship = reverse_matching.iloc[0]
+                        relationships[(source, target)] = {
+                            'id': relationship['id'],
+                            'human_readable_id': relationship['human_readable_id'],
+                            'source': relationship['target'],  # Swap source and target
+                            'target': relationship['source'],
+                            'description': relationship['description'],
+                            'weight': relationship['weight'],
+                            'combined_degree': relationship['combined_degree'],
+                            'text_unit_ids': relationship['text_unit_ids']
+                        }
+                    else:
+                        # If no relationship found, create an entry with empty values
+                        relationships[(source, target)] = {
+                            'id': '',
+                            'human_readable_id': '',
+                            'source': source,
+                            'target': target,
+                            'description': '',
+                            'weight': 0,
+                            'combined_degree': 0,
+                            'text_unit_ids': []
+                        }
+                        print(f"Warning: No relationship found for {source} -> {target}")
+        
+        # Print some statistics
+        total_relationships = len(relationships)
+        empty_relationships = sum(1 for rel in relationships.values() if not rel['description'])
+        print(f"\nRelationship Statistics:")
+        print(f"Total relationships: {total_relationships}")
+        print(f"Empty relationships: {empty_relationships}")
+        print(f"Percentage empty: {(empty_relationships/total_relationships)*100:.2f}%")
+        
+        return relationships
+        
+    except Exception as e:
+        print(f"Error reading relationships file: {str(e)}")
+        raise
 
 def optimized_extract_community_chains(
     graphml_path: str,
     communities_parquet_path: str,
     chain_length: int,
-    n_communities: int,
-    n_samples_per_community: Optional[int],
+    n_communities: Optional[int] = None,
+    n_samples_per_community: Optional[int] = None,
+    selected_community_ids: Optional[List[int]] = None,
     max_attempts: int = 1000
 ) -> Dict[int, Set[Tuple[str, ...]]]:
     """
     Extract chains of entities from specific communities in a graph using an optimized random walk strategy.
     Each chain is guaranteed to be within a single community.
-    
-    Args:
-        graphml_path (str): Path to the .graphml file containing the full graph
-        communities_parquet_path (str): Path to the parquet file containing community information
-        chain_length (int): Desired length of the entity chains
-        n_communities (int): Number of communities to sample from
-        n_samples_per_community (Optional[int]): Number of chains to sample per community. 
-            If None, extracts all possible chains.
-        max_attempts (int): Maximum number of attempts to find valid chains per community (ignored if n_samples_per_community is None)
-        
-    Returns:
-        Dict[int, Set[Tuple[str, ...]]]: Dictionary mapping community IDs to sets of entity chains.
-            Each chain is a tuple of entity names (not UUIDs).
     """
     print("Starting chain extraction process...")
     
@@ -333,9 +374,15 @@ def optimized_extract_community_chains(
     
     print(f"Created mapping for {len(uuid_to_name)} entities")
     
-    # Randomly select n_communities
-    selected_communities = communities_df.sample(n=min(n_communities, len(communities_df)))
-    print(f"Selected {len(selected_communities)} communities")
+    # Select communities based on provided parameters
+    if selected_community_ids is not None:
+        # Filter communities to only include selected IDs
+        selected_communities = communities_df.loc[selected_community_ids]
+        print(f"Selected {len(selected_communities)} specific communities")
+    else:
+        # Randomly select n_communities
+        selected_communities = communities_df.sample(n=min(n_communities, len(communities_df)))
+        print(f"Selected {len(selected_communities)} random communities")
     
     # Dictionary to store chains for each community
     community_chains = {}
@@ -375,8 +422,11 @@ def optimized_extract_community_chains(
                             paths = list(nx.all_simple_paths(community_subgraph, start_node, end_node, cutoff=chain_length-1))
                             valid_paths = [path for path in paths if len(path) == chain_length]
                             for path in valid_paths:
-                                # Store the chain with entity names directly
-                                chains.add(tuple(path))
+                                # Validate path before adding
+                                if all(node and isinstance(node, str) for node in path):
+                                    chains.add(tuple(path))
+                                else:
+                                    print(f"Warning: Invalid path found: {path}")
                         except nx.NetworkXNoPath:
                             continue
         else:
@@ -384,6 +434,8 @@ def optimized_extract_community_chains(
             
             def is_chain_unique(chain: List[str]) -> bool:
                 """Check if a chain is unique by comparing both forward and reverse order."""
+                if not all(node and isinstance(node, str) for node in chain):
+                    return False
                 chain_tuple = tuple(chain)
                 reverse_chain_tuple = tuple(reversed(chain))
                 return chain_tuple not in chains and reverse_chain_tuple not in chains
@@ -411,10 +463,13 @@ def optimized_extract_community_chains(
                 
                 # If we found a valid chain of the right length
                 if len(chain) == chain_length and is_chain_unique(chain):
-                    # Store the chain with entity names directly
-                    chains.add(tuple(chain))
+                    # Validate chain before adding
+                    if all(node and isinstance(node, str) for node in chain):
+                        chains.add(tuple(chain))
+                    else:
+                        print(f"Warning: Invalid chain found: {chain}")
         
-        print(f"Found {len(chains)} chains")
+        print(f"Found {len(chains)} valid chains")
         if chains:
             community_chains[community_id] = chains
     
