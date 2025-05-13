@@ -1,6 +1,12 @@
+import os
 import asyncio
 from deep_reason.gen_agent.agent import ComplexRelationshipAgent
 from deep_reason.rag.utils import VLLMChatOpenAI
+
+# Defining path with graphrag output info
+dataset_name = 'obliqa'
+base_graphrag_output_path = 'datasets/graphs/obliqa/output/'
+
 
 
 async def main():
@@ -15,37 +21,21 @@ async def main():
         no_think=True
     )
     
-    # Example 1: Regular chain sampling
-    # print("\nExample 1: Regular chain sampling")
-    # agent = ComplexRelationshipAgent(
-    #     llm=llm,
-    #     graphml_path="datasets/graphs/tat_data_3/output/graph.graphml",
-    #     entities_parquet_path="datasets/graphs/tat_data_3/output/entities.parquet",
-    #     relationships_parquet_path="datasets/graphs/tat_data_3/output/relationships.parquet",
-    #     chain_length=3,
-    #     n_samples=2,
-    #     dataset_name="tat_data_3"
-    # )
-    
-    # # Infer relationships and prepare knowledge editing inputs
-    # results = await agent.infer_relationships()
-    # print_results(results)
-    
-    # Example 2: Community-based sampling
+    # Example: Community-based sampling
     print("\nExample 2: Community-based sampling")
     agent = ComplexRelationshipAgent(
         llm=llm,
-        graphml_path="datasets/graphs/tat_personalii_2/output/graph.graphml",
-        entities_parquet_path="datasets/graphs/tat_personalii_2/output/entities.parquet",
-        relationships_parquet_path="datasets/graphs/tat_personalii_2/output/relationships.parquet",
+        graphml_path=os.path.join(base_graphrag_output_path, "graph.graphml"),
+        entities_parquet_path=os.path.join(base_graphrag_output_path, "entities.parquet"),
+        relationships_parquet_path=os.path.join(base_graphrag_output_path, "relationships.parquet"),
         chain_length=4,
         n_samples=20,  # This will be ignored when use_communities is True
         use_communities=True,
-        communities_parquet_path="datasets/graphs/tat_personalii_2/output/communities.parquet",
+        communities_parquet_path=os.path.join(base_graphrag_output_path, "communities.parquet"),
         n_communities=None,
         selected_community_ids=[36104,21178,6934,24718,802],
         n_samples_per_community=30,
-        dataset_name="tat_personalii_2"
+        dataset_name="obliqa"
     )
     
     # Infer relationships and prepare knowledge editing inputs

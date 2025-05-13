@@ -20,7 +20,6 @@ from deep_reason.gen_agent.scheme import (
     ComplexRelationshipResult,
     WikidataRecentKnowledgeEditingInput,
     InferredRelationship,
-    Generalization,
     Locality,
     Portability
 )
