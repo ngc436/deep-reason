@@ -99,6 +99,18 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--min-entities-per-community",
+        type=int,
+        help="Minimum number of entities required in a community (optional)"
+    )
+
+    parser.add_argument(
+        "--max-entities-per-community",
+        type=int,
+        help="Maximum number of entities allowed in a community (optional)"
+    )
+
+    parser.add_argument(
         "--dataset-name",
         type=str,
         default="unknown",
@@ -151,6 +163,8 @@ async def main():
             communities_parquet_path=args.communities if args.use_communities else None,
             n_communities=args.n_communities if args.use_communities else None,
             n_samples_per_community=args.n_samples_per_community if args.use_communities else None,
+            min_entities_per_community=args.min_entities_per_community if args.use_communities else None,
+            max_entities_per_community=args.max_entities_per_community if args.use_communities else None,
             dataset_name=args.dataset_name
         )
         

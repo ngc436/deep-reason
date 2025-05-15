@@ -53,6 +53,8 @@ class ComplexRelationshipAgent:
         n_communities: Optional[int] = None,
         n_samples_per_community: Optional[int] = None,
         selected_community_ids: Optional[List[int]] = None,
+        min_entities_per_community: Optional[int] = None,
+        max_entities_per_community: Optional[int] = None,
         dataset_name: str = "unknown"
     ):
         self.llm = llm
@@ -69,6 +71,8 @@ class ComplexRelationshipAgent:
         self.n_communities = n_communities
         self.n_samples_per_community = n_samples_per_community
         self.selected_community_ids = selected_community_ids
+        self.min_entities_per_community = min_entities_per_community
+        self.max_entities_per_community = max_entities_per_community
         self.dataset_name = dataset_name
         
         # Validate community-related parameters
@@ -78,6 +82,9 @@ class ComplexRelationshipAgent:
             if not self.selected_community_ids and not self.n_communities:
                 raise ValueError("Either selected_community_ids or n_communities must be provided when use_communities is True")
             # n_samples_per_community can be None to get all possible chains
+            if self.min_entities_per_community is not None and self.max_entities_per_community is not None:
+                if self.min_entities_per_community > self.max_entities_per_community:
+                    raise ValueError("min_entities_per_community cannot be greater than max_entities_per_community")
         
         # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
@@ -339,166 +346,212 @@ class ComplexRelationshipAgent:
                         evidence=[]
                     )
     
-    async def infer_relationships(self) -> List[Dict[str, Any]]:
-        """Infer complex relationships for sampled chains and prepare knowledge editing inputs"""
+    def _create_relationship_prompt(self, chain: Tuple[str, ...], entity_descriptions: Dict[str, str], relationships: List[str]) -> str:
+        """Create a prompt for relationship inference.
         
-        # Sample chains based on configuration
+        Args:
+            chain: Tuple of entities in the chain
+            entity_descriptions: Dictionary mapping entities to their descriptions
+            relationships: List of relationship descriptions between consecutive entities
+            
+        Returns:
+            Formatted prompt string
+        """
+        # Format the chain
+        chain_str = " -> ".join(chain)
+        
+        # Format entity descriptions
+        desc_str = "\n".join(f"{entity}: {desc}" for entity, desc in entity_descriptions.items())
+        
+        # Format relationships
+        rel_str = "\n".join(relationships)
+        
+        # Create the prompt
+        prompt = f"""Given the following chain of entities and their relationships:
+
+Chain: {chain_str}
+
+Entity Descriptions:
+{desc_str}
+
+Direct Relationships:
+{rel_str}
+
+Please infer the complex relationship between the first and last entities in the chain.
+Consider the intermediate entities and their relationships to understand the full context.
+
+Provide your response in the following JSON format:
+{{
+    "first_entity": "name of first entity",
+    "last_entity": "name of last entity",
+    "relationships": ["list of inferred relationships"],
+    "evidence": ["list of evidence supporting the relationships"],
+    "score": 0.0,  # confidence score between 0 and 1
+    "reasoning": "explanation of how you arrived at these relationships"
+}}
+
+The response must be a valid JSON object starting with {{ and ending with }}.
+Do not include any text before or after the JSON object.
+"""
+        return prompt
+
+    def _parse_llm_response(self, response: Any, chain: Tuple[str, ...], entity_descriptions: Dict[str, str], relationships: List[str]) -> Dict[str, Any]:
+        """Parse the LLM response into a result dictionary.
+        
+        Args:
+            response: LLM response
+            chain: Original chain of entities
+            entity_descriptions: Dictionary mapping entities to their descriptions
+            relationships: List of relationship descriptions
+            
+        Returns:
+            Dictionary containing the parsed result
+        """
+        try:
+            # Extract content from AIMessage if needed
+            if hasattr(response, 'content'):
+                response = response.content
+            
+            # Parse the JSON response
+            data = json.loads(response.strip())
+            
+            # Create the result dictionary
+            result = {
+                "chain": list(chain),
+                "first_entity": data.get("first_entity", chain[0]),
+                "last_entity": data.get("last_entity", chain[-1]),
+                "entity_descriptions": entity_descriptions,
+                "relationship_descriptions": relationships,
+                "inferred_relationships": data.get("relationships", []),
+                "evidence": data.get("evidence", []),
+                "score": float(data.get("score", 0.0)),
+                "reasoning": data.get("reasoning", "No reasoning provided")
+            }
+            
+            return result
+            
+        except Exception as e:
+            print(f"Error parsing LLM response: {e}")
+            # Return a default result if parsing fails
+            return {
+                "chain": list(chain),
+                "first_entity": chain[0],
+                "last_entity": chain[-1],
+                "entity_descriptions": entity_descriptions,
+                "relationship_descriptions": relationships,
+                "inferred_relationships": ["no_relationship"],
+                "evidence": [],
+                "score": 0.0,
+                "reasoning": f"Error parsing response: {str(e)}"
+            }
+
+    async def infer_relationships(self) -> List[Dict[str, Any]]:
+        """
+        Infer relationships between entities in chains using the LLM.
+        Returns a list of dictionaries containing the chain, entity descriptions, relationship descriptions,
+        and inferred relationships.
+        """
         print("Sampling entity chains...")
+        
         if self.use_communities:
-            print(f"Using community-based sampling")
+            print("Using community-based sampling")
             if self.selected_community_ids:
-                print(f"Using {len(self.selected_community_ids)} specific community IDs")
+                print(f"Using {len(self.selected_community_ids)} selected communities")
             else:
                 print(f"Using {self.n_communities} random communities")
-            if self.n_samples_per_community is None:
-                print("Getting all possible chains per community")
-            else:
-                print(f"Getting {self.n_samples_per_community} chains per community")
+            print(f"Getting {self.n_samples_per_community} chains per community")
+            print(f"Minimum entities per community: {self.min_entities_per_community}")
+            print(f"Maximum entities per community: {self.max_entities_per_community}")
+            
+            # Get chains from communities
             community_chains = optimized_extract_community_chains(
                 self.graphml_path,
                 self.communities_parquet_path,
                 self.chain_length,
                 self.n_communities,
                 self.n_samples_per_community,
-                self.selected_community_ids
+                self.selected_community_ids,
+                self.min_entities_per_community,
+                self.max_entities_per_community
             )
-            # Flatten community chains into a single list while preserving community IDs
-            chains = []
-            chain_to_community = {}  # Map to store chain -> community_id mapping
-            for community_id, community_chain_set in community_chains.items():
-                for chain in community_chain_set:
-                    # Convert chain entities to lowercase
-                    lower_chain = tuple(entity.lower() for entity in chain)
-                    chains.append(lower_chain)
-                    chain_to_community[lower_chain] = community_id
-            print(f"Found total of {len(chains)} chains across all communities")
+            
+            # Flatten chains from all communities
+            all_chains = set()
+            for community_id, chains in community_chains.items():
+                all_chains.update(chains)
+            print(f"Found total of {len(all_chains)} valid chains across all communities")
+            
+            if not all_chains:
+                print("Warning: No valid chains found in any community")
+                return []
+                
+            chains = all_chains
         else:
-            print("Using regular chain sampling")
-            raw_chains = list(optimized_extract_entity_chains(
+            print("Using random sampling")
+            chains = optimized_extract_entity_chains(
                 self.graphml_path,
                 self.chain_length,
                 self.n_samples
-            ))
-            # Convert chain entities to lowercase
-            chains = [tuple(entity.lower() for entity in chain) for chain in raw_chains]
-            chain_to_community = {}  # Empty dict for regular sampling
-            print(f"Found {len(chains)} chains")
+            )
+            print(f"Found {len(chains)} valid chains")
         
-        # Get entity descriptions
+        if not chains:
+            print("No valid chains found")
+            return []
+        
         print("Mapping entities to descriptions...")
-        entity_descriptions = map_entities_to_descriptions(
-            chains,
-            self.entities_parquet_path
-        )
+        entity_descriptions = map_entities_to_descriptions(chains, self.entities_parquet_path)
         
-        # Get relationships
         print("Extracting chain relationships...")
-        relationships = extract_chain_relationships(
-            chains,
-            self.relationships_parquet_path
-        )
-        
-        # Process each chain with progress bar
-        print("Processing chains to infer relationships and prepare knowledge editing inputs...")
-        results = []
+        relationships = extract_chain_relationships(chains, self.relationships_parquet_path)
         
         # Process chains in batches
-        for i in range(0, len(chains), self.max_concurrency):
-            batch = chains[i:i + self.max_concurrency]
-            batch_results = []
+        results = []
+        batch_size = 5  # Process 5 chains at a time
+        
+        for i in range(0, len(chains), batch_size):
+            batch_chains = list(chains)[i:i + batch_size]
+            print(f"\nProcessing batch {i//batch_size + 1} of {(len(chains) + batch_size - 1)//batch_size}")
             
-            async for chain in tqdm(batch, desc=f"Processing batch {i//self.max_concurrency + 1}"):
+            for chain in batch_chains:
                 try:
-                    # Prepare initial state
-                    state = {
-                        "entity_chain": chain,
-                        "entity_descriptions": entity_descriptions,
-                        "relationships": relationships,
-                        "complex_relationship": None,
-                        "knowledge_editing_input": None
+                    # Convert chain entities to lowercase and ensure they are ASCII
+                    try:
+                        chain = tuple(entity.encode('ascii', 'ignore').decode('ascii').lower() for entity in chain)
+                    except Exception as e:
+                        print(f"Warning: Skipping chain with encoding issues: {e}")
+                        continue
+                        
+                    if not all(chain):  # Skip if any entity is empty after conversion
+                        print("Warning: Skipping chain with empty entities after conversion")
+                        continue
+                    
+                    # Get entity descriptions for this chain
+                    chain_descriptions = {
+                        entity: entity_descriptions.get(entity, {}).get('description', '')
+                        for entity in chain
                     }
                     
-                    # Run the workflow
-                    final_state = await self.workflow.ainvoke(state)
+                    # Get relationship descriptions for this chain
+                    chain_relationships = []
+                    for j in range(len(chain) - 1):
+                        source, target = chain[j], chain[j + 1]
+                        rel = relationships.get((source, target), {})
+                        if rel and rel.get('description'):
+                            chain_relationships.append(f"{source} -> {target}: {rel['description']}")
                     
-                    # Convert to result format
-                    knowledge_editing_input = final_state["knowledge_editing_input"]
-                    if isinstance(knowledge_editing_input, list):
-                        knowledge_editing_input_dumped = [k.model_dump() for k in knowledge_editing_input]
-                    elif knowledge_editing_input is not None:
-                        knowledge_editing_input_dumped = knowledge_editing_input.model_dump()
-                    else:
-                        knowledge_editing_input_dumped = None
-
-                    # Create ComplexRelationshipResult
-                    result = ComplexRelationshipResult(
-                        chain=list(chain),
-                        first_entity=final_state["complex_relationship"].first_entity,
-                        last_entity=final_state["complex_relationship"].last_entity,
-                        entity_descriptions={
-                            entity: desc["description"]
-                            for entity, desc in entity_descriptions.items()
-                            if entity in chain
-                        },
-                        relationship_descriptions=[
-                            f"{source} -> {target}: {rel['description']}"
-                            for (source, target), rel in relationships.items()
-                            if source in chain and target in chain
-                        ],
-                        inferred_relationships=[
-                            InferredRelationship(
-                                relationship=rel,
-                                evidence=final_state["complex_relationship"].evidence,
-                                score=float(final_state["complex_relationship"].score) if hasattr(final_state["complex_relationship"], "score") else 0.0,
-                                reasoning=final_state["complex_relationship"].reasoning if hasattr(final_state["complex_relationship"], "reasoning") else "No reasoning provided"
-                            )
-                            for rel in final_state["complex_relationship"].relationships
-                        ]
-                    )
+                    # Prepare the prompt for relationship inference
+                    prompt = self._create_relationship_prompt(chain, chain_descriptions, chain_relationships)
                     
-                    # Convert to dictionary and add additional fields
-                    result_dict = result.model_dump()
-                    result_dict["evidence"] = final_state["complex_relationship"].evidence
-                    result_dict["knowledge_editing_input"] = knowledge_editing_input_dumped
-                    # Add community_id if available
-                    result_dict["community_id"] = chain_to_community.get(tuple(chain)) if self.use_communities else None
+                    # Get LLM response
+                    response = await self.llm.ainvoke(prompt)
                     
-                    batch_results.append(result_dict)
+                    # Parse the response
+                    result = self._parse_llm_response(response, chain, chain_descriptions, chain_relationships)
+                    results.append(result)
+                    
                 except Exception as e:
-                    print(f"Error processing chain {chain}: {str(e)}")
-                    # Add a default result for failed chains
-                    result = ComplexRelationshipResult(
-                        chain=list(chain),
-                        first_entity=chain[0],
-                        last_entity=chain[-1],
-                        entity_descriptions={},
-                        relationship_descriptions=[],
-                        inferred_relationships=[
-                            InferredRelationship(
-                                relationship="no_relationship",
-                                evidence=[],
-                                score=0.0,
-                                reasoning=f"Error occurred while processing chain: {str(e)}"
-                            )
-                        ]
-                    )
-                    result_dict = result.model_dump()
-                    result_dict["evidence"] = []
-                    result_dict["knowledge_editing_input"] = None
-                    result_dict["community_id"] = None
-                    batch_results.append(result_dict)
-            
-            results.extend(batch_results)
-        
-        # Save results to JSON file with dataset name, sampling type, and chain length
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        sampling_type = "community" if self.use_communities else "regular"
-        output_file = os.path.join(
-            self.output_dir,
-            f"complex_agent_result_{self.dataset_name}_{sampling_type}_chain{self.chain_length}_{timestamp}.json"
-        )
-        with open(output_file, 'w') as f:
-            json.dump(results, f, indent=2)
-        print(f"Results saved to {output_file}")
+                    print(f"Error processing chain: {e}")
+                    continue
         
         return results
