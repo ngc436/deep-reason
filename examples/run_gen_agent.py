@@ -32,8 +32,8 @@ async def main():
         n_samples=20,  # This will be ignored when use_communities is True
         use_communities=True,
         communities_parquet_path=os.path.join(base_graphrag_output_path, "communities.parquet"),
-        n_communities=None,
-        selected_community_ids=[36104,21178,6934,24718,802],
+        n_communities=5,
+        # selected_community_ids=[36104,21178,6934,24718,802],
         n_samples_per_community=30,
         dataset_name="obliqa"
     )

@@ -6,6 +6,7 @@ from collections import deque
 import pandas as pd
 import numpy as np
 import os
+import matplotlib.pyplot as plt
 
 def extract_entity_chains(graphml_path: str, chain_length: int, n_samples: Optional[int] = None) -> Set[Tuple[str, ...]]:
     """

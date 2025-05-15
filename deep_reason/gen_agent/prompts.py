@@ -8,6 +8,13 @@ Your task is to define all the relationships between the first and the last enti
 This relationship should be meaningful and should be supported by the evidence. You should not create simple statements like "Entity A is related to Entity C through Entity B" or "Entity A is a part of Entity B".
 Created relationship will be used to infer novel triplets for knowledge graph to enrich it with new information, so be creative and think about complex relationships.
 If there is no relationship between the first and the last entity that you can infer from the provided information, return "no_relationship".
+You will be also asked to score the quality of the inferred relationship between the first and the last entity of the chain.
+Scoring rules are the following:
+- Score should be an integer in range [0, 10]
+- If from chain A -> B -> C -> D, you can infer only that A is indirectly connected to D than such connection should be scored very low.
+- Score in range 0 - 3 indicate very low quality of the inferred relationship - trivial or in the form that "A and D are indirectly connected through B and C"
+- Score in range 4 - 7 indicate medium quality of the inferred relationship - the relationship is meaningful but it is not interesting
+- Score in range 8 - 10 indicate high quality of the inferred relationship - not obvious, novel relationship between entities, for instance, combination by similar characteristics or some complex logical transition from one entity to another
 
 -Input-
 ENTITY CHAIN:
@@ -218,3 +225,6 @@ Strictly use the same language as in the user input. Your answer must be a valid
 {schema}
     
 """
+
+def QA_COMPOSITION_ON_COMMUNITY_SUMMARY_PROMPT(community_summary: str) -> str:
+    pass
